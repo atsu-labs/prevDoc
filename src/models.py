@@ -55,10 +55,12 @@ class Annotation:
         self.id = str(uuid.uuid4())
         self.type = type # 'line', 'polygon', 'circle', 'text'
         self.points = [] # List of QPointF or (x,y) tuples? internally let's use QPointF
-        self.color = "red"
+        self.color = "#7c4dff"
         self.text = ""
         self.font_family = "Arial"
         self.font_size = 12
+        self.line_width = 2
+        self.opacity = 100
         self.real_value = 0.0
         self.page_num = 0
 
@@ -78,6 +80,8 @@ class Annotation:
             "text": self.text,
             "font_family": self.font_family,
             "font_size": self.font_size,
+            "line_width": self.line_width,
+            "opacity": self.opacity,
             "real_value": self.real_value,
             "page_num": self.page_num
         }
@@ -88,10 +92,12 @@ class Annotation:
         ann = cls(data["type"])
         ann.id = data.get("id", str(uuid.uuid4()))
         ann.points = [QPointF(p[0], p[1]) for p in data.get("points", [])]
-        ann.color = data.get("color", "red")
+        ann.color = data.get("color", "#7c4dff")
         ann.text = data.get("text", "")
         ann.font_family = data.get("font_family", "Arial")
         ann.font_size = data.get("font_size", 12)
+        ann.line_width = data.get("line_width", 2)
+        ann.opacity = data.get("opacity", 100)
         ann.real_value = data.get("real_value", 0.0)
         ann.page_num = data.get("page_num", 0)
         return ann

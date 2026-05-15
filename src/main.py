@@ -3,151 +3,236 @@ import os
 import json
 import fitz # PyMuPDF
 from PySide6.QtWidgets import (QApplication, QMainWindow, QFileDialog, 
-                             QToolBar, QLabel, QSpinBox, QHBoxLayout, 
-                             QWidget, QVBoxLayout, QInputDialog, QMessageBox,
-                             QColorDialog, QDockWidget)
-from PySide6.QtGui import QAction
-from PySide6.QtCore import Qt
+                             QLabel, QHBoxLayout, QWidget, QVBoxLayout, 
+                             QInputDialog, QMessageBox, QDockWidget, QPushButton, 
+                             QFrame, QSpacerItem, QSizePolicy)
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QIcon, QAction
 
 from pdf_handler import PDFHandler
 from canvas import PDFCanvas, ToolMode
 from models import DrawingModel, Annotation
 from property_panel import PropertyPanel
+from navigator_panel import NavigatorPanel
+from styles import GLOBAL_STYLE
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("建築図面注釈・計測ツール")
-        self.resize(1200, 800)
+        self.setWindowTitle("FirePreview")
+        self.resize(1400, 900)
 
         self.pdf_handler = PDFHandler()
         self.model = DrawingModel()
         self.current_page = 0
 
         self.setup_ui()
+        self._setup_menus()
+        self.apply_styles()
+
+    def _setup_menus(self):
+        menubar = self.menuBar()
+        # Ensure menubar style matches dark theme
+        menubar.setStyleSheet("QMenuBar { background-color: #151521; color: #ffffff; border-bottom: 1px solid #333344; } QMenuBar::item:selected { background-color: #2a2a3d; }")
+        
+        file_menu = menubar.addMenu("ファイル")
+        
+        open_action = QAction("PDF図面を開く", self)
+        open_action.setShortcut("Ctrl+O")
+        open_action.triggered.connect(self.open_pdf)
+        file_menu.addAction(open_action)
+
+        swap_action = QAction("背景PDFを差し替え", self)
+        swap_action.triggered.connect(self.swap_pdf)
+        file_menu.addAction(swap_action)
+
+        file_menu.addSeparator()
+
+        save_action = QAction("プロジェクトを保存", self)
+        save_action.setShortcut("Ctrl+S")
+        save_action.triggered.connect(self.save_project)
+        file_menu.addAction(save_action)
+
+        load_action = QAction("プロジェクトを読み込み", self)
+        load_action.setShortcut("Ctrl+L")
+        load_action.triggered.connect(self.load_project)
+        file_menu.addAction(load_action)
+
+        file_menu.addSeparator()
+
+        export_action = QAction("PDFを書き出し", self)
+        export_action.setShortcut("Ctrl+E")
+        export_action.triggered.connect(self.export_pdf)
+        file_menu.addAction(export_action)
 
     def setup_ui(self):
-        # Canvas
+        # Central Widget
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        self.main_layout = QVBoxLayout(self.central_widget)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
+
+        # 1. Header
+        self._setup_header()
+
+        # 2. Main Tool Bar
+        self._setup_toolbar()
+
+        # 3. Tool Options Bar
+        self._setup_options_bar()
+
+        # 4. Content Area (Navigator | Canvas | Property)
+        content_area = QHBoxLayout()
+        content_area.setSpacing(0)
+
+        # Navigator (Left)
+        self.navigator = NavigatorPanel()
+        self.navigator.setFixedWidth(220)
+        self.navigator.page_changed.connect(self.go_to_page)
+        content_area.addWidget(self.navigator)
+
+        # Canvas (Center)
         self.canvas = PDFCanvas()
+        self.canvas.setStyleSheet("background-color: #0f0f1a; border: none;")
         self.canvas.calibration_points_selected.connect(self.on_calibration_selected)
         self.canvas.measurement_complete.connect(self.on_measurement_complete)
         self.canvas.polygon_complete.connect(self.on_polygon_complete)
         self.canvas.point_selected.connect(self.on_point_selected)
-        
-        # Selection/Property signals
         self.canvas.item_selected.connect(self.on_item_selected)
         self.canvas.selection_cleared.connect(self.on_selection_cleared)
         self.canvas.item_moved.connect(self.on_item_moved)
-        
-        self.setCentralWidget(self.canvas)
+        content_area.addWidget(self.canvas)
 
-        # Property Panel (Dock)
-        self.prop_dock = QDockWidget("プロパティ", self)
+        # Property Panel (Right)
         self.prop_panel = PropertyPanel()
+        self.prop_panel.setFixedWidth(280)
         self.prop_panel.attribute_changed.connect(self.on_property_changed)
         self.prop_panel.delete_requested.connect(self.on_delete_item)
-        self.prop_dock.setWidget(self.prop_panel)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.prop_dock)
+        content_area.addWidget(self.prop_panel)
 
-        # Toolbar
-        self.toolbar = QToolBar("Main Toolbar")
-        self.addToolBar(self.toolbar)
+        self.main_layout.addLayout(content_area)
 
-        # File Actions
-        open_action = QAction("PDFを開く", self)
-        open_action.triggered.connect(self.open_pdf)
-        self.toolbar.addAction(open_action)
+        # 5. Status Bar
+        self._setup_status_bar()
 
-        swap_action = QAction("背景差し替え", self)
-        swap_action.triggered.connect(self.swap_pdf)
-        self.toolbar.addAction(swap_action)
+    def _setup_header(self):
+        header = QFrame()
+        header.setObjectName("MainHeader")
+        header.setFixedHeight(50)
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(15, 0, 15, 0)
 
-        save_action = QAction("保存", self)
-        save_action.triggered.connect(self.save_project)
-        self.toolbar.addAction(save_action)
+        title = QLabel("FirePreview")
+        title.setStyleSheet("font-weight: bold; font-size: 18px; color: #ffffff;")
+        h_layout.addWidget(title)
 
-        load_action = QAction("読込", self)
-        load_action.triggered.connect(self.load_project)
-        self.toolbar.addAction(load_action)
+        h_layout.addSpacing(20)
+        
+        btn_files = QPushButton("🗁 すべてのファイル")
+        btn_save = QPushButton("💾 保存")
+        h_layout.addWidget(btn_files)
+        h_layout.addWidget(btn_save)
 
-        export_action = QAction("PDF書き出し", self)
-        export_action.triggered.connect(self.export_pdf)
-        self.toolbar.addAction(export_action)
+        h_layout.addStretch()
 
-        self.toolbar.addSeparator()
+        btn_share = QPushButton("📤")
+        btn_settings = QPushButton("⚙")
+        user_info = QLabel("👤 ユーザー名")
+        h_layout.addWidget(btn_share)
+        h_layout.addWidget(btn_settings)
+        h_layout.addWidget(user_info)
 
-        # Selection Tool
-        select_action = QAction("選択・移動", self)
-        select_action.triggered.connect(lambda: self.canvas.set_tool_mode(ToolMode.SELECT))
-        self.toolbar.addAction(select_action)
+        self.main_layout.addWidget(header)
 
-        self.toolbar.addSeparator()
+    def _setup_toolbar(self):
+        toolbar = QFrame()
+        toolbar.setObjectName("ToolBar")
+        t_layout = QHBoxLayout(toolbar)
+        t_layout.setContentsMargins(10, 0, 10, 0)
 
-        # Tools
-        calibrate_action = QAction("キャリブレーション", self)
-        calibrate_action.triggered.connect(lambda: self.canvas.set_tool_mode(ToolMode.CALIBRATE))
-        self.toolbar.addAction(calibrate_action)
+        tools = [
+            ("Å", "選択", ToolMode.SELECT),
+            ("✋", "パン", ToolMode.NONE),
+            ("⬜", "矩形", ToolMode.POLYGON_AREA), # 仮
+            ("T", "テキスト", ToolMode.TEXT),
+            ("🖋", "ペン", ToolMode.MEASURE_LINE), # 仮
+            ("⬭", "15m円", ToolMode.CIRCLE_FIXED),
+            ("📏", "計測", ToolMode.CALIBRATE),
+            ("💬", "コメント", ToolMode.TEXT)
+        ]
 
-        measure_action = QAction("距離計測", self)
-        measure_action.triggered.connect(lambda: self._check_calib_and_set_mode(ToolMode.MEASURE_LINE))
-        self.toolbar.addAction(measure_action)
+        self.tool_btns = []
+        for icon_text, tip, mode in tools:
+            btn = QPushButton(icon_text)
+            btn.setObjectName("ToolBtn")
+            btn.setToolTip(tip)
+            btn.setFixedSize(40, 40)
+            btn.setCheckable(True)
+            btn.clicked.connect(lambda checked, m=mode, b=btn: self.set_tool(m, b))
+            t_layout.addWidget(btn)
+            self.tool_btns.append(btn)
 
-        area_action = QAction("面積計測", self)
-        area_action.triggered.connect(lambda: self._check_calib_and_set_mode(ToolMode.POLYGON_AREA))
-        self.toolbar.addAction(area_action)
+        t_layout.addStretch()
+        
+        self.zoom_label = QLabel("表示倍率: 100%")
+        t_layout.addWidget(self.zoom_label)
 
-        circle_action = QAction("15m円", self)
-        circle_action.triggered.connect(lambda: self._check_calib_and_set_mode(ToolMode.CIRCLE_FIXED))
-        self.toolbar.addAction(circle_action)
+        self.main_layout.addWidget(toolbar)
 
-        text_action = QAction("テキスト", self)
-        text_action.triggered.connect(lambda: self.canvas.set_tool_mode(ToolMode.TEXT))
-        self.toolbar.addAction(text_action)
+    def _setup_options_bar(self):
+        self.options_bar = QFrame()
+        self.options_bar.setObjectName("ToolOptionsBar")
+        o_layout = QHBoxLayout(self.options_bar)
+        o_layout.setContentsMargins(15, 0, 15, 0)
 
-        self.toolbar.addSeparator()
+        o_layout.addWidget(QLabel("ツールプロパティ: 未選択"))
+        o_layout.addStretch()
+        
+        self.main_layout.addWidget(self.options_bar)
 
-        # Page Navigation
-        self.prev_btn = QAction("前へ", self)
-        self.prev_btn.triggered.connect(self.prev_page)
-        self.prev_btn.setEnabled(False)
-        self.toolbar.addAction(self.prev_btn)
+    def _setup_status_bar(self):
+        status = QFrame()
+        status.setFixedHeight(25)
+        status.setStyleSheet("background-color: #151521; border-top: 1px solid #333344;")
+        s_layout = QHBoxLayout(status)
+        s_layout.setContentsMargins(10, 0, 10, 0)
+        
+        self.coord_label = QLabel("X: 0.0px  Y: 0.0px")
+        self.coord_label.setStyleSheet("color: #888899; font-size: 10px;")
+        s_layout.addStretch()
+        s_layout.addWidget(self.coord_label)
+        
+        self.main_layout.addWidget(status)
 
-        self.page_label = QLabel(" ページ: 0 / 0 ")
-        self.toolbar.addWidget(self.page_label)
+    def apply_styles(self):
+        self.setStyleSheet(GLOBAL_STYLE)
 
-        self.next_btn = QAction("次へ", self)
-        self.next_btn.triggered.connect(self.next_page)
-        self.next_btn.setEnabled(False)
-        self.toolbar.addAction(self.next_btn)
+    def set_tool(self, mode, active_btn):
+        for btn in self.tool_btns:
+            btn.setChecked(btn == active_btn)
+            btn.setProperty("active", btn == active_btn)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+        
+        if mode in [ToolMode.MEASURE_LINE, ToolMode.POLYGON_AREA, ToolMode.CIRCLE_FIXED]:
+            if not self.model.is_calibrated and mode != ToolMode.CALIBRATE:
+                QMessageBox.warning(self, "警告", "先にキャリブレーションを行ってください。")
+                active_btn.setChecked(False)
+                return
 
-        self.toolbar.addSeparator()
-
-        reset_btn = QAction("表示リセット", self)
-        reset_btn.triggered.connect(self.canvas.reset_view)
-        self.toolbar.addAction(reset_btn)
-
-        # Scale Label
-        self.scale_label = QLabel(" スケール: 未設定 ")
-        self.statusBar().addPermanentWidget(self.scale_label)
-
-    def _check_calib_and_set_mode(self, mode):
-        if not self.model.is_calibrated:
-            QMessageBox.warning(self, "警告", "先にキャリブレーションを行ってください。")
-            return
         self.canvas.set_tool_mode(mode)
 
+    def go_to_page(self, page_idx):
+        self.current_page = page_idx
+        self.update_page_view()
+
+    # --- (Delegated Methods from original main.py) ---
     def on_calibration_selected(self, p1, p2):
         dist_mm, ok = QInputDialog.getDouble(self, "キャリブレーション", "実寸法を入力してください (mm):", 1000, 0, 1000000, 1)
         if ok:
             if self.model.set_calibration(p1, p2, dist_mm):
-                self._update_scale_label()
                 QMessageBox.information(self, "完了", "キャリブレーションが完了しました。")
-
-    def _update_scale_label(self):
-        if self.model.is_calibrated:
-            self.scale_label.setText(f" スケール: {self.model.scale_factor:.4f} mm/px ")
-        else:
-            self.scale_label.setText(" スケール: 未設定 ")
 
     def on_measurement_complete(self, p1, p2):
         dist_mm = self.model.calculate_real_distance(p1, p2)
@@ -187,7 +272,7 @@ class MainWindow(QMainWindow):
     def on_item_selected(self, item_id):
         for ann in self.model.annotations:
             if ann.id == item_id:
-                self.prop_panel.set_item_data(ann.id, ann.type, ann.text, ann.color, ann.font_family, ann.font_size)
+                self.prop_panel.set_item_data(ann.id, ann.type, ann.text, ann.color, ann.font_family, ann.font_size, ann.line_width, ann.opacity)
                 break
 
     def on_selection_cleared(self):
@@ -196,14 +281,12 @@ class MainWindow(QMainWindow):
     def on_property_changed(self, item_id, attrs):
         for ann in self.model.annotations:
             if ann.id == item_id:
-                if "text" in attrs:
-                    ann.text = attrs["text"]
-                if "color" in attrs:
-                    ann.color = attrs["color"]
-                if "font_family" in attrs:
-                    ann.font_family = attrs["font_family"]
-                if "font_size" in attrs:
-                    ann.font_size = attrs["font_size"]
+                if "text" in attrs: ann.text = attrs["text"]
+                if "color" in attrs: ann.color = attrs["color"]
+                if "font_family" in attrs: ann.font_family = attrs["font_family"]
+                if "font_size" in attrs: ann.font_size = attrs["font_size"]
+                if "line_width" in attrs: ann.line_width = attrs["line_width"]
+                if "opacity" in attrs: ann.opacity = attrs["opacity"]
                 self.update_page_view()
                 break
 
@@ -223,6 +306,7 @@ class MainWindow(QMainWindow):
             if self.pdf_handler.open_file(file_path):
                 self.model.pdf_path = file_path
                 self.current_page = 0
+                self._load_thumbnails()
                 self.update_page_view()
                 self.canvas.reset_view()
 
@@ -246,7 +330,6 @@ class MainWindow(QMainWindow):
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             self.model = DrawingModel.from_dict(data)
-            self._update_scale_label()
             
             if self.model.pdf_path and os.path.exists(self.model.pdf_path):
                 self.pdf_handler.open_file(self.model.pdf_path)
@@ -255,6 +338,7 @@ class MainWindow(QMainWindow):
                 self.open_pdf()
             
             self.current_page = 0
+            self._load_thumbnails()
             self.update_page_view()
             self.canvas.reset_view()
 
@@ -281,6 +365,7 @@ class MainWindow(QMainWindow):
             from PySide6.QtGui import QColor
             c = QColor(ann.color)
             color = (c.red()/255.0, c.green()/255.0, c.blue()/255.0)
+            fill_opacity = ann.opacity / 100.0
             
             def to_pdf_pt(qp):
                 return fitz.Point(qp.x() * dpi_factor, qp.y() * dpi_factor)
@@ -288,33 +373,41 @@ class MainWindow(QMainWindow):
             if ann.type == "line":
                 p1 = to_pdf_pt(ann.points[0])
                 p2 = to_pdf_pt(ann.points[1])
-                page.draw_line(p1, p2, color=color, width=1)
+                page.draw_line(p1, p2, color=color, width=ann.line_width, stroke_opacity=fill_opacity)
                 if ann.text:
                     mid = (p1 + p2) / 2
-                    page.insert_text(mid, ann.text, color=color, fontsize=ann.font_size, fontname="helv")
+                    page.insert_text(mid, ann.text, color=color, fontsize=ann.font_size, fontname="helv", fill_opacity=fill_opacity)
             
             elif ann.type == "polygon":
                 pts = [to_pdf_pt(p) for p in ann.points]
-                page.draw_polyline(pts + [pts[0]], color=color, width=1)
+                page.draw_polyline(pts + [pts[0]], color=color, width=ann.line_width, stroke_opacity=fill_opacity)
                 if ann.text:
                     avg_x = sum(p.x for p in pts) / len(pts)
                     avg_y = sum(p.y for p in pts) / len(pts)
-                    page.insert_text((avg_x, avg_y), ann.text, color=color, fontsize=ann.font_size, fontname="helv")
+                    page.insert_text((avg_x, avg_y), ann.text, color=color, fontsize=ann.font_size, fontname="helv", fill_opacity=fill_opacity)
             
             elif ann.type == "circle":
                 center = to_pdf_pt(ann.points[0])
                 radius = (ann.real_value / self.model.scale_factor) * dpi_factor
-                page.draw_circle(center, radius, color=color, width=1)
+                page.draw_circle(center, radius, color=color, width=ann.line_width, stroke_opacity=fill_opacity)
                 if ann.text:
-                    page.insert_text((center.x, center.y - radius - 5), ann.text, color=color, fontsize=ann.font_size, fontname="helv")
+                    page.insert_text((center.x, center.y - radius - 5), ann.text, color=color, fontsize=ann.font_size, fontname="helv", fill_opacity=fill_opacity)
             
             elif ann.type == "text":
                 pos = to_pdf_pt(ann.points[0])
-                page.insert_text(pos, ann.text, color=color, fontsize=ann.font_size, fontname="helv")
+                page.insert_text(pos, ann.text, color=color, fontsize=ann.font_size, fontname="helv", fill_opacity=fill_opacity)
 
         export_doc.save(file_path)
         export_doc.close()
         QMessageBox.information(self, "書き出し", f"PDFを書き出しました: {file_path}")
+
+    def _load_thumbnails(self):
+        pixmaps = []
+        count = self.pdf_handler.get_page_count()
+        for i in range(count):
+            pixmaps.append(self.pdf_handler.get_page_pixmap(i))
+        self.navigator.set_page_count(count)
+        self.navigator.update_thumbnails(pixmaps)
 
     def update_page_view(self):
         pixmap = self.pdf_handler.get_page_pixmap(self.current_page)
@@ -323,32 +416,21 @@ class MainWindow(QMainWindow):
             for ann in self.model.annotations:
                 if ann.page_num == self.current_page:
                     if ann.type == "line":
-                        self.canvas.add_line_annotation(ann.points[0], ann.points[1], text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size)
+                        self.canvas.add_line_annotation(ann.points[0], ann.points[1], text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, line_width=ann.line_width, opacity=ann.opacity)
                     elif ann.type == "polygon":
-                        self.canvas.add_polygon_annotation(ann.points, text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size)
+                        self.canvas.add_polygon_annotation(ann.points, text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, line_width=ann.line_width, opacity=ann.opacity)
                     elif ann.type == "circle":
                         radius_px = ann.real_value / self.model.scale_factor
-                        self.canvas.add_circle_annotation(ann.points[0], radius_px, text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size)
+                        self.canvas.add_circle_annotation(ann.points[0], radius_px, text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, line_width=ann.line_width, opacity=ann.opacity)
                     elif ann.type == "text":
-                        self.canvas.add_text_annotation(ann.points[0], ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size)
+                        self.canvas.add_text_annotation(ann.points[0], ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, opacity=ann.opacity)
             
-            total_pages = self.pdf_handler.get_page_count()
-            self.page_label.setText(f" ページ: {self.current_page + 1} / {total_pages} ")
-            self.prev_btn.setEnabled(self.current_page > 0)
-            self.next_btn.setEnabled(self.current_page < total_pages - 1)
-            
-            # Re-apply interactive flags if in SELECT mode
-            self.canvas.set_tool_mode(self.canvas.tool_mode)
+            if not self.model.pdf_path:
+                pass 
 
-    def prev_page(self):
-        if self.current_page > 0:
-            self.current_page -= 1
-            self.update_page_view()
-
-    def next_page(self):
-        if self.current_page < self.pdf_handler.get_page_count() - 1:
-            self.current_page += 1
-            self.update_page_view()
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_O and event.modifiers() & Qt.ControlModifier:
+            self.open_pdf()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

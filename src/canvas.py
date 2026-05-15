@@ -1,5 +1,5 @@
-from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsLineItem, QGraphicsTextItem, QGraphicsEllipseItem, QGraphicsPolygonItem, QMenu
-from PySide6.QtCore import Qt, Signal, QPointF
+from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsLineItem, QGraphicsTextItem, QGraphicsEllipseItem, QGraphicsPolygonItem, QMenu, QGraphicsItem
+from PySide6.QtCore import Qt, Signal, QPointF, QRectF
 from PySide6.QtGui import QPainter, QPen, QColor, QPolygonF, QAction, QFont
 
 class ToolMode:
@@ -58,20 +58,20 @@ class PDFCanvas(QGraphicsView):
             self.setDragMode(QGraphicsView.ScrollHandDrag)
             self.setCursor(Qt.ArrowCursor)
             self._set_items_interactive(False)
+            self.scene.clearSelection()
         else:
             self.setDragMode(QGraphicsView.NoDrag)
             self.setCursor(Qt.CrossCursor)
             self._set_items_interactive(False)
+            self.scene.clearSelection()
 
     def _set_items_interactive(self, interactive):
         for item in self.scene.items():
             if item == self.background_item: continue
-            # Only enable for the main annotation items (those with IDs)
-            if item.data(0):
-                item.setFlag(QGraphicsLineItem.ItemIsSelectable, interactive)
-                item.setFlag(QGraphicsLineItem.ItemIsMovable, interactive)
-                # Ensure the text items attached to lines etc also move or are handled
-                # For simplicity, we'll focus on the main shapes.
+            if item.data(0): # Check for item ID
+                item.setFlag(QGraphicsItem.ItemIsSelectable, interactive)
+                item.setFlag(QGraphicsItem.ItemIsMovable, interactive)
+                # Visual effect for selectable items could go here
 
     def _clear_temp_items(self):
         if self.temp_line:
@@ -97,20 +97,45 @@ class PDFCanvas(QGraphicsView):
         else:
             super().wheelEvent(event)
 
+    def drawForeground(self, painter, rect):
+        # Draw selection boxes for selected items
+        for item in self.scene.selectedItems():
+            if item == self.background_item: continue
+            painter.save()
+            painter.setPen(QPen(QColor(255, 255, 255), 1, Qt.DashLine))
+            painter.setBrush(Qt.NoBrush)
+            # Map item's bounding rect to scene
+            br = item.sceneBoundingRect()
+            painter.drawRect(br.adjusted(-2, -2, 2, 2))
+            
+            # Draw handles at corners
+            painter.setBrush(QColor(124, 77, 255))
+            painter.setPen(Qt.NoPen)
+            s = 6 / self.transform().m11() # Scale handle size with zoom
+            for p in [br.topLeft(), br.topRight(), br.bottomLeft(), br.bottomRight()]:
+                painter.drawRect(QRectF(p.x() - s/2, p.y() - s/2, s, s))
+            painter.restore()
+        super().drawForeground(painter, rect)
+
     def mousePressEvent(self, event):
         if self.tool_mode == ToolMode.SELECT:
             if event.button() == Qt.LeftButton:
                 pos = self.mapToScene(event.pos())
                 item = self.scene.itemAt(pos, self.transform())
-                if item and item != self.background_item:
-                    while item and not item.data(0) and item.parentItem():
-                        item = item.parentItem()
-                    if item and item.data(0):
-                        self.item_selected.emit(item.data(0))
-                    else:
-                        self.selection_cleared.emit()
+                
+                # Walk up to find the main item with ID
+                while item and not item.data(0) and item.parentItem():
+                    item = item.parentItem()
+                
+                if item and item != self.background_item and item.data(0):
+                    # Select ONLY this item
+                    self.scene.clearSelection()
+                    item.setSelected(True)
+                    self.item_selected.emit(item.data(0))
                 else:
+                    self.scene.clearSelection()
                     self.selection_cleared.emit()
+                self.viewport().update() # Ensure feedback is drawn
             super().mousePressEvent(event)
             return
 
@@ -125,7 +150,7 @@ class PDFCanvas(QGraphicsView):
                 self.temp_points.append(pos)
                 if len(self.temp_points) == 1:
                     self.temp_line = QGraphicsLineItem(pos.x(), pos.y(), pos.x(), pos.y())
-                    pen = QPen(QColor("red"), 2)
+                    pen = QPen(QColor(124, 77, 255), 2)
                     pen.setCosmetic(True)
                     self.temp_line.setPen(pen)
                     self.scene.addItem(self.temp_line)
@@ -141,10 +166,10 @@ class PDFCanvas(QGraphicsView):
                 self.temp_points.append(pos)
                 if not self.temp_poly:
                     self.temp_poly = QGraphicsPolygonItem()
-                    pen = QPen(QColor("blue"), 2)
+                    pen = QPen(QColor(124, 77, 255), 2)
                     pen.setCosmetic(True)
                     self.temp_poly.setPen(pen)
-                    self.temp_poly.setBrush(QColor(0, 0, 255, 50))
+                    self.temp_poly.setBrush(QColor(124, 77, 255, 50))
                     self.scene.addItem(self.temp_poly)
                 self.temp_poly.setPolygon(QPolygonF(self.temp_points))
 
@@ -178,36 +203,38 @@ class PDFCanvas(QGraphicsView):
                 item_id = item.data(0)
                 last_pos = item.data(1)
                 if item_id and last_pos is not None:
+                    # ItemIsMovable handles the pos update, we calculate delta
                     delta = item.pos() - last_pos
                     if delta.x() != 0 or delta.y() != 0:
                         self.item_moved.emit(item_id, delta)
-                        # Store current pos as the new baseline
                         item.setData(1, item.pos())
         super().mouseReleaseEvent(event)
 
-    def add_line_annotation(self, p1, p2, text="", color="red", item_id=None, font_family="Arial", font_size=12):
+    def add_line_annotation(self, p1, p2, text="", color="red", item_id=None, font_family="Arial", font_size=12, line_width=2, opacity=100):
         line = QGraphicsLineItem(p1.x(), p1.y(), p2.x(), p2.y())
-        pen = QPen(QColor(color), 2)
+        pen = QPen(QColor(color), line_width)
         pen.setCosmetic(True)
         line.setPen(pen)
+        line.setOpacity(opacity / 100.0)
         if item_id: 
             line.setData(0, item_id)
-            line.setData(1, line.pos()) # store initial pos (0,0)
+            line.setData(1, QPointF(0,0)) # Initial relative pos
         self.scene.addItem(line)
         
         txt_item = self._add_text_item(text, (p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2, color, font_family, font_size)
         if txt_item:
-            txt_item.setParentItem(line) # Move with line
+            txt_item.setParentItem(line)
 
-    def add_polygon_annotation(self, points, text="", color="blue", item_id=None, font_family="Arial", font_size=12):
+    def add_polygon_annotation(self, points, text="", color="blue", item_id=None, font_family="Arial", font_size=12, line_width=2, opacity=100):
         poly = QGraphicsPolygonItem(QPolygonF(points))
-        pen = QPen(QColor(color), 2)
+        pen = QPen(QColor(color), line_width)
         pen.setCosmetic(True)
         poly.setPen(pen)
         poly.setBrush(QColor(QColor(color).red(), QColor(color).green(), QColor(color).blue(), 30))
+        poly.setOpacity(opacity / 100.0)
         if item_id: 
             poly.setData(0, item_id)
-            poly.setData(1, poly.pos()) # store initial pos (0,0)
+            poly.setData(1, QPointF(0,0))
         self.scene.addItem(poly)
         
         avg_x = sum(p.x() for p in points) / len(points)
@@ -216,25 +243,28 @@ class PDFCanvas(QGraphicsView):
         if txt_item:
             txt_item.setParentItem(poly)
 
-    def add_circle_annotation(self, center, radius_px, text="", color="green", item_id=None, font_family="Arial", font_size=12):
+    def add_circle_annotation(self, center, radius_px, text="", color="green", item_id=None, font_family="Arial", font_size=12, line_width=2, opacity=100):
         circle = QGraphicsEllipseItem(center.x() - radius_px, center.y() - radius_px, radius_px * 2, radius_px * 2)
-        pen = QPen(QColor(color), 2)
+        pen = QPen(QColor(color), line_width)
         pen.setCosmetic(True)
         circle.setPen(pen)
+        circle.setOpacity(opacity / 100.0)
         if item_id: 
             circle.setData(0, item_id)
-            circle.setData(1, circle.pos()) # store initial pos (0,0)
+            circle.setData(1, QPointF(0,0))
         self.scene.addItem(circle)
         
         txt_item = self._add_text_item(text, center.x(), center.y() - radius_px - 10, color, font_family, font_size)
         if txt_item:
             txt_item.setParentItem(circle)
 
-    def add_text_annotation(self, pos, text, color="black", item_id=None, font_family="Arial", font_size=12):
+    def add_text_annotation(self, pos, text, color="black", item_id=None, font_family="Arial", font_size=12, opacity=100):
         txt_item = self._add_text_item(text, pos.x(), pos.y(), color, font_family, font_size)
-        if txt_item and item_id:
-            txt_item.setData(0, item_id)
-            txt_item.setData(1, txt_item.pos()) # store initial pos (x,y)
+        if txt_item:
+            txt_item.setOpacity(opacity / 100.0)
+            if item_id:
+                txt_item.setData(0, item_id)
+                txt_item.setData(1, QPointF(0,0))
 
     def _add_text_item(self, text, x, y, color, font_family="Arial", font_size=12):
         if not text: return None
@@ -245,7 +275,6 @@ class PDFCanvas(QGraphicsView):
         text_item.setFont(font)
         
         text_item.setPos(x, y)
-        # Removed ItemIgnoresTransformations to make text scale with the drawing
         self.scene.addItem(text_item)
         return text_item
 
