@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, 
                              QPushButton, QColorDialog, QHBoxLayout, QFontComboBox, 
-                             QSpinBox, QSlider, QFrame, QGridLayout)
+                             QSpinBox, QSlider, QFrame, QGridLayout, QPlainTextEdit)
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QColor, QFont
 
@@ -110,8 +110,9 @@ class PropertyPanel(QWidget):
         text_layout.addLayout(font_layout)
 
         text_layout.addWidget(QLabel("ラベル / テキスト"))
-        self.text_edit = QLineEdit()
-        self.text_edit.editingFinished.connect(self._on_text_changed)
+        self.text_edit = QPlainTextEdit()
+        self.text_edit.setFixedHeight(60)
+        self.text_edit.textChanged.connect(self._on_text_changed)
         text_layout.addWidget(self.text_edit)
         self.main_layout.addWidget(self.text_container)
 
@@ -145,7 +146,7 @@ class PropertyPanel(QWidget):
         self.text_container.setVisible(is_text or has_label)
         
         # Update values
-        self.text_edit.setText(text)
+        self.text_edit.setPlainText(text)
         self.color_preview.setStyleSheet(f"background-color: {color_hex}; border-radius: 4px;")
         self.color_hex_label.setText(color_hex.upper())
         self.current_color = color_hex
@@ -164,14 +165,14 @@ class PropertyPanel(QWidget):
         self._block_signals = True
         self.current_item_id = None
         self.type_title.setText("要素を選択してください")
-        self.text_edit.setText("")
+        self.text_edit.setPlainText("")
         self.color_preview.setStyleSheet("background-color: transparent; border: 1px solid #3d3d5c;")
         self.setEnabled(False)
         self._block_signals = False
 
     def _on_text_changed(self):
         if not self._block_signals and self.current_item_id:
-            self.attribute_changed.emit(self.current_item_id, {"text": self.text_edit.text()})
+            self.attribute_changed.emit(self.current_item_id, {"text": self.text_edit.toPlainText()})
 
     def _on_font_family_changed(self, font):
         if not self._block_signals and self.current_item_id:

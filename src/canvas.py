@@ -2,6 +2,25 @@ from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
 from PySide6.QtCore import Qt, Signal, QPointF, QRectF
 from PySide6.QtGui import QPainter, QPen, QColor, QPolygonF, QAction, QFont
 
+class CustomTextItem(QGraphicsTextItem):
+    editing_finished = Signal(str)
+    
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        
+    def mouseDoubleClickEvent(self, event):
+        if self.flags() & QGraphicsItem.ItemIsSelectable:
+            self.setTextInteractionFlags(Qt.TextEditorInteraction)
+            self.setFocus()
+            event.accept()
+        else:
+            super().mouseDoubleClickEvent(event)
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        self.setTextInteractionFlags(Qt.NoTextInteraction)
+        self.editing_finished.emit(self.toPlainText())
+
 class ToolMode:
     NONE = 0
     CALIBRATE = 1
@@ -22,6 +41,10 @@ class PDFCanvas(QGraphicsView):
     selection_cleared = Signal()
     item_moved = Signal(str, QPointF) # id, delta
     request_delete = Signal(str) # id
+    request_tool_change = Signal(int) # next_mode
+    
+    text_editing_finished = Signal(QPointF, str, str, str, int, str) # pos, text, item_id, font_family, font_size, color
+    existing_text_edited = Signal(str, str) # item_id, new_text
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -44,6 +67,19 @@ class PDFCanvas(QGraphicsView):
         self.temp_points = []
         self.temp_line = None
         self.temp_poly = None
+        
+        # Text default properties
+        self.current_text_font = "Arial"
+        self.current_text_size = 12
+        self.current_text_color = "#ff0000"
+        self.continuous_text_input = False
+        self.editing_text_item = None
+
+    def set_text_defaults(self, font_family, font_size, color, continuous=False):
+        self.current_text_font = font_family
+        self.current_text_size = font_size
+        self.current_text_color = color
+        self.continuous_text_input = continuous
 
     def set_tool_mode(self, mode):
         self.tool_mode = mode
@@ -173,19 +209,64 @@ class PDFCanvas(QGraphicsView):
                     self.scene.addItem(self.temp_poly)
                 self.temp_poly.setPolygon(QPolygonF(self.temp_points))
 
-            elif self.tool_mode in [ToolMode.CIRCLE_FIXED, ToolMode.TEXT]:
+            elif self.tool_mode == ToolMode.CIRCLE_FIXED:
                 self.point_selected.emit(pos)
-                self._finish_tool()
+                self._finish_tool(ToolMode.SELECT)
+                
+            elif self.tool_mode == ToolMode.TEXT:
+                item = self.scene.itemAt(pos, self.transform())
+                if item == self.editing_text_item:
+                    super().mousePressEvent(event)
+                    return
+                
+                if self.editing_text_item:
+                    self.editing_text_item.clearFocus()
+                    if not self.continuous_text_input:
+                        super().mousePressEvent(event)
+                        return
+                        
+                self._start_inline_text_editing(pos)
+                super().mousePressEvent(event)
+                return
 
         elif event.button() == Qt.RightButton:
             if self.tool_mode == ToolMode.POLYGON_AREA and len(self.temp_points) >= 3:
                 self.polygon_complete.emit(self.temp_points)
-                self._finish_tool()
+                self._finish_tool(ToolMode.SELECT)
 
-    def _finish_tool(self):
+    def _start_inline_text_editing(self, pos):
+        if self.editing_text_item:
+            self.scene.removeItem(self.editing_text_item)
+            self.editing_text_item = None
+            
+        self.editing_text_item = CustomTextItem("")
+        self.editing_text_item.setPos(pos)
+        self.editing_text_item.setDefaultTextColor(QColor(self.current_text_color))
+        font = QFont(self.current_text_font, self.current_text_size)
+        self.editing_text_item.setFont(font)
+        
+        self.scene.addItem(self.editing_text_item)
+        self.editing_text_item.setTextInteractionFlags(Qt.TextEditorInteraction)
+        self.editing_text_item.setFocus()
+        
+        self.editing_text_item.editing_finished.connect(self._on_inline_text_finished)
+
+    def _on_inline_text_finished(self, text):
+        if self.editing_text_item:
+            pos = self.editing_text_item.pos()
+            self.scene.removeItem(self.editing_text_item)
+            self.editing_text_item = None
+            
+            if text.strip():
+                self.text_editing_finished.emit(pos, text, "", self.current_text_font, self.current_text_size, self.current_text_color)
+                
+        if not self.continuous_text_input:
+            self._finish_tool(ToolMode.SELECT)
+
+    def _finish_tool(self, next_mode=ToolMode.NONE):
         self._clear_temp_items()
         self.temp_points = []
-        self.set_tool_mode(ToolMode.NONE)
+        self.request_tool_change.emit(next_mode)
 
     def mouseMoveEvent(self, event):
         pos = self.mapToScene(event.pos())
@@ -268,7 +349,7 @@ class PDFCanvas(QGraphicsView):
 
     def _add_text_item(self, text, x, y, color, font_family="Arial", font_size=12):
         if not text: return None
-        text_item = QGraphicsTextItem(text)
+        text_item = CustomTextItem(text)
         text_item.setDefaultTextColor(QColor(color))
         
         font = QFont(font_family, font_size)
@@ -276,7 +357,52 @@ class PDFCanvas(QGraphicsView):
         
         text_item.setPos(x, y)
         self.scene.addItem(text_item)
+        
+        text_item.editing_finished.connect(lambda txt, item=text_item: self._on_existing_text_edited(txt, item))
         return text_item
+
+    def _on_existing_text_edited(self, new_text, item):
+        item_id = item.data(0)
+        if not item_id and item.parentItem():
+            item_id = item.parentItem().data(0)
+            
+        if item_id:
+            self.existing_text_edited.emit(item_id, new_text)
+
+    def update_item_properties(self, item_id, attrs):
+        for item in self.scene.items():
+            if item.data(0) == item_id:
+                if "color" in attrs or "line_width" in attrs or "opacity" in attrs:
+                    if isinstance(item, (QGraphicsLineItem, QGraphicsEllipseItem, QGraphicsPolygonItem)):
+                        pen = item.pen()
+                        if "color" in attrs:
+                            c = QColor(attrs["color"])
+                            pen.setColor(c)
+                            if isinstance(item, QGraphicsPolygonItem):
+                                item.setBrush(QColor(c.red(), c.green(), c.blue(), 30))
+                        if "line_width" in attrs:
+                            pen.setWidth(attrs["line_width"])
+                        item.setPen(pen)
+                    if "opacity" in attrs:
+                        item.setOpacity(attrs["opacity"] / 100.0)
+                        
+                text_items = [item] if isinstance(item, QGraphicsTextItem) else [child for child in item.childItems() if isinstance(child, QGraphicsTextItem)]
+                
+                for txt in text_items:
+                    font = txt.font()
+                    if "font_family" in attrs:
+                        font.setFamily(attrs["font_family"])
+                    if "font_size" in attrs:
+                        font.setPointSize(attrs["font_size"])
+                    txt.setFont(font)
+                    
+                    if "text" in attrs:
+                        txt.setPlainText(attrs["text"])
+                    if "color" in attrs:
+                        txt.setDefaultTextColor(QColor(attrs["color"]))
+                    if "opacity" in attrs:
+                        txt.setOpacity(attrs["opacity"] / 100.0)
+                break
 
     def reset_view(self):
         self.resetTransform()

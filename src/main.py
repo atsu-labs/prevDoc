@@ -5,9 +5,9 @@ import fitz # PyMuPDF
 from PySide6.QtWidgets import (QApplication, QMainWindow, QFileDialog, 
                              QLabel, QHBoxLayout, QWidget, QVBoxLayout, 
                              QInputDialog, QMessageBox, QDockWidget, QPushButton, 
-                             QFrame, QSpacerItem, QSizePolicy)
+                             QFrame, QSpacerItem, QSizePolicy, QFontComboBox, QSpinBox, QColorDialog, QCheckBox)
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QIcon, QAction
+from PySide6.QtGui import QIcon, QAction, QFont, QColor
 
 from pdf_handler import PDFHandler
 from canvas import PDFCanvas, ToolMode
@@ -25,6 +25,10 @@ class MainWindow(QMainWindow):
         self.pdf_handler = PDFHandler()
         self.model = DrawingModel()
         self.current_page = 0
+        
+        self.current_text_font = "Arial"
+        self.current_text_size = 12
+        self.current_text_color = "#ff0000"
 
         self.setup_ui()
         self._setup_menus()
@@ -102,6 +106,9 @@ class MainWindow(QMainWindow):
         self.canvas.item_selected.connect(self.on_item_selected)
         self.canvas.selection_cleared.connect(self.on_selection_cleared)
         self.canvas.item_moved.connect(self.on_item_moved)
+        self.canvas.text_editing_finished.connect(self.on_text_editing_finished)
+        self.canvas.request_tool_change.connect(self.on_request_tool_change)
+        self.canvas.existing_text_edited.connect(self.on_existing_text_edited)
         content_area.addWidget(self.canvas)
 
         # Property Panel (Right)
@@ -166,6 +173,7 @@ class MainWindow(QMainWindow):
         for icon_text, tip, mode in tools:
             btn = QPushButton(icon_text)
             btn.setObjectName("ToolBtn")
+            btn.setProperty("tool_mode", mode)
             btn.setToolTip(tip)
             btn.setFixedSize(40, 40)
             btn.setCheckable(True)
@@ -183,13 +191,67 @@ class MainWindow(QMainWindow):
     def _setup_options_bar(self):
         self.options_bar = QFrame()
         self.options_bar.setObjectName("ToolOptionsBar")
+        self.options_bar.setFixedHeight(40)
         o_layout = QHBoxLayout(self.options_bar)
         o_layout.setContentsMargins(15, 0, 15, 0)
 
-        o_layout.addWidget(QLabel("ツールプロパティ: 未選択"))
-        o_layout.addStretch()
+        self.default_opt_label = QLabel("ツールプロパティ: 未選択")
+        o_layout.addWidget(self.default_opt_label)
         
+        self.text_options_widget = QWidget()
+        text_layout = QHBoxLayout(self.text_options_widget)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        
+        text_layout.addWidget(QLabel("フォント:"))
+        self.tool_font_combo = QFontComboBox()
+        self.tool_font_combo.setCurrentFont(QFont(self.current_text_font))
+        self.tool_font_combo.currentFontChanged.connect(self._on_tool_font_changed)
+        text_layout.addWidget(self.tool_font_combo)
+        
+        text_layout.addWidget(QLabel("サイズ:"))
+        self.tool_font_size_spin = QSpinBox()
+        self.tool_font_size_spin.setRange(1, 200)
+        self.tool_font_size_spin.setValue(self.current_text_size)
+        self.tool_font_size_spin.valueChanged.connect(self._on_tool_font_size_changed)
+        text_layout.addWidget(self.tool_font_size_spin)
+        
+        text_layout.addWidget(QLabel("色:"))
+        self.tool_color_preview = QFrame()
+        self.tool_color_preview.setFixedSize(20, 20)
+        self.tool_color_preview.setStyleSheet(f"background-color: {self.current_text_color}; border-radius: 4px;")
+        text_layout.addWidget(self.tool_color_preview)
+        
+        self.tool_color_btn = QPushButton("変更")
+        self.tool_color_btn.clicked.connect(self._on_tool_color_clicked)
+        text_layout.addWidget(self.tool_color_btn)
+        
+        self.tool_continuous_check = QCheckBox("連続入力")
+        self.tool_continuous_check.setChecked(False)
+        self.tool_continuous_check.setStyleSheet("color: white;")
+        self.tool_continuous_check.toggled.connect(self._on_tool_continuous_changed)
+        text_layout.addWidget(self.tool_continuous_check)
+        
+        o_layout.addWidget(self.text_options_widget)
+        self.text_options_widget.hide()
+        
+        o_layout.addStretch()
         self.main_layout.addWidget(self.options_bar)
+
+    def _on_tool_continuous_changed(self, checked):
+        if self.canvas.tool_mode == ToolMode.TEXT:
+            self.canvas.set_text_defaults(self.current_text_font, self.current_text_size, self.current_text_color, checked)
+
+    def _on_tool_font_changed(self, font):
+        self.current_text_font = font.family()
+
+    def _on_tool_font_size_changed(self, size):
+        self.current_text_size = size
+
+    def _on_tool_color_clicked(self):
+        color = QColorDialog.getColor(QColor(self.current_text_color))
+        if color.isValid():
+            self.current_text_color = color.name()
+            self.tool_color_preview.setStyleSheet(f"background-color: {self.current_text_color}; border-radius: 4px;")
 
     def _setup_status_bar(self):
         status = QFrame()
@@ -222,6 +284,14 @@ class MainWindow(QMainWindow):
                 return
 
         self.canvas.set_tool_mode(mode)
+        
+        if mode == ToolMode.TEXT:
+            self.default_opt_label.hide()
+            self.text_options_widget.show()
+            self.canvas.set_text_defaults(self.current_text_font, self.current_text_size, self.current_text_color, self.tool_continuous_check.isChecked())
+        else:
+            self.default_opt_label.show()
+            self.text_options_widget.hide()
 
     def go_to_page(self, page_idx):
         self.current_page = page_idx
@@ -254,11 +324,38 @@ class MainWindow(QMainWindow):
             text = "R=15m"
             ann = self._add_to_model("circle", [pos], radius_mm, text=text)
             self.canvas.add_circle_annotation(pos, radius_px, text=text, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size)
-        elif self.canvas.tool_mode == ToolMode.TEXT:
-            text, ok = QInputDialog.getText(self, "テキスト入力", "注釈を入力してください:")
-            if ok and text:
-                ann = self._add_to_model("text", [pos], text=text)
-                self.canvas.add_text_annotation(pos, text, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size)
+
+    def on_request_tool_change(self, mode):
+        for btn in self.tool_btns:
+            if btn.property("tool_mode") == mode:
+                self.set_tool(mode, btn)
+                break
+
+    def on_text_editing_finished(self, pos, text, item_id, font_family, font_size, color):
+        if not item_id:
+            ann = self._add_to_model("text", [pos], text=text)
+            ann.font_family = font_family
+            ann.font_size = font_size
+            ann.color = color
+            self.canvas.add_text_annotation(pos, text, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, color=ann.color)
+        else:
+            # Update existing if needed
+            pass
+
+    def on_existing_text_edited(self, item_id, new_text):
+        for ann in self.model.annotations:
+            if ann.id == item_id:
+                ann.text = new_text
+                break
+        
+        # If the edited item is currently selected in the property panel, update it there too
+        if hasattr(self.prop_panel, 'current_item_id') and self.prop_panel.current_item_id == item_id:
+            self.prop_panel._block_signals = True
+            if hasattr(self.prop_panel.text_edit, 'setPlainText'):
+                self.prop_panel.text_edit.setPlainText(new_text)
+            else:
+                self.prop_panel.text_edit.setText(new_text)
+            self.prop_panel._block_signals = False
 
     def _add_to_model(self, type, points, real_value=0.0, text=""):
         ann = Annotation(type)
@@ -287,7 +384,7 @@ class MainWindow(QMainWindow):
                 if "font_size" in attrs: ann.font_size = attrs["font_size"]
                 if "line_width" in attrs: ann.line_width = attrs["line_width"]
                 if "opacity" in attrs: ann.opacity = attrs["opacity"]
-                self.update_page_view()
+                self.canvas.update_item_properties(item_id, attrs)
                 break
 
     def on_item_moved(self, item_id, delta):
