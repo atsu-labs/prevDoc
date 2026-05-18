@@ -738,8 +738,8 @@ class MainWindow(QMainWindow):
                                        by + perp_y * marker_size * 0.45)
                     wing2 = fitz.Point(bx - perp_x * marker_size * 0.45,
                                        by - perp_y * marker_size * 0.45)
-                    pg.draw_polygon([pt, wing1, wing2], color=color, fill=color,
-                                    width=0, stroke_opacity=fill_opacity, fill_opacity=fill_opacity)
+                    pg.draw_polyline([pt, wing1, wing2], color=color, fill=color,
+                                     width=0, closePath=True, stroke_opacity=fill_opacity, fill_opacity=fill_opacity)
 
             def _pdf_center_marker(pg, center, marker_type):
                 """Draw center marker for a circle."""
