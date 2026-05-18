@@ -79,6 +79,7 @@ class PDFCanvas(QGraphicsView):
         self.current_shape_color = "#7c4dff"
         self.current_shape_line_width = 2
         self.current_fill_color = ""
+        self.continuous_shape = False  # Stay in same tool after completing a shape
         
         # Text default properties
         self.current_text_font = "Arial"
@@ -97,6 +98,9 @@ class PDFCanvas(QGraphicsView):
         self.current_shape_color = line_color
         self.current_shape_line_width = line_width
         self.current_fill_color = fill_color
+
+    def set_shape_continuous(self, continuous):
+        self.continuous_shape = continuous
 
     def set_tool_mode(self, mode):
         self.tool_mode = mode
@@ -268,10 +272,10 @@ class PDFCanvas(QGraphicsView):
         elif event.button() == Qt.RightButton:
             if self.tool_mode == ToolMode.POLYGON_AREA and len(self.temp_points) >= 3:
                 self.polygon_complete.emit(self.temp_points)
-                self._finish_tool(ToolMode.SELECT)
+                self._finish_tool(self.tool_mode if self.continuous_shape else ToolMode.SELECT)
             elif self.tool_mode == ToolMode.DRAW_LINE and len(self.temp_points) >= 2:
                 self.polyline_complete.emit(self.temp_points[:])
-                self._finish_tool(ToolMode.SELECT)
+                self._finish_tool(self.tool_mode if self.continuous_shape else ToolMode.SELECT)
 
     def _update_temp_polyline_path(self, preview_end=None):
         if not self.temp_poly or not self.temp_points:
@@ -326,7 +330,7 @@ class PDFCanvas(QGraphicsView):
                 self.temp_points.pop()
             if len(self.temp_points) >= 2:
                 self.polyline_complete.emit(self.temp_points[:])
-                self._finish_tool(ToolMode.SELECT)
+                self._finish_tool(self.tool_mode if self.continuous_shape else ToolMode.SELECT)
             return
         super().mouseDoubleClickEvent(event)
 
@@ -366,7 +370,7 @@ class PDFCanvas(QGraphicsView):
                 self.temp_circle = None
             # Emit even with small radius (0 means "use preset from tool options")
             self.circle_drag_complete.emit(center, radius)
-            self._finish_tool(ToolMode.SELECT)
+            self._finish_tool(self.tool_mode if self.continuous_shape else ToolMode.SELECT)
             return
         if self.tool_mode == ToolMode.SELECT:
             # Check if any item moved
@@ -396,7 +400,7 @@ class PDFCanvas(QGraphicsView):
         if txt_item:
             txt_item.setParentItem(line)
 
-    def add_polyline_annotation(self, points, text="", color="#7c4dff", item_id=None, font_family="Arial", font_size=12, line_width=2, opacity=100):
+    def add_polyline_annotation(self, points, text="", color="#7c4dff", item_id=None, font_family="Arial", font_size=12, line_width=2, opacity=100, start_marker="", end_marker=""):
         if not points:
             return
         path = QPainterPath()
@@ -413,6 +417,12 @@ class PDFCanvas(QGraphicsView):
             item.setData(0, item_id)
             item.setData(1, QPointF(0, 0))
         self.scene.addItem(item)
+
+        if len(points) >= 2:
+            if start_marker:
+                self._draw_endpoint_marker(item, points[0], points[1], start_marker, color)
+            if end_marker:
+                self._draw_endpoint_marker(item, points[-1], points[-2], end_marker, color)
 
         if text:
             mid_idx = len(points) // 2
@@ -445,7 +455,7 @@ class PDFCanvas(QGraphicsView):
         if txt_item:
             txt_item.setParentItem(poly)
 
-    def add_circle_annotation(self, center, radius_px, text="", color="green", item_id=None, font_family="Arial", font_size=12, line_width=2, opacity=100, fill_color=""):
+    def add_circle_annotation(self, center, radius_px, text="", color="green", item_id=None, font_family="Arial", font_size=12, line_width=2, opacity=100, fill_color="", center_marker=""):
         circle = QGraphicsEllipseItem(center.x() - radius_px, center.y() - radius_px, radius_px * 2, radius_px * 2)
         pen = QPen(QColor(color), line_width)
         pen.setCosmetic(True)
@@ -461,10 +471,89 @@ class PDFCanvas(QGraphicsView):
             circle.setData(0, item_id)
             circle.setData(1, QPointF(0,0))
         self.scene.addItem(circle)
+
+        if center_marker:
+            cx, cy = center.x(), center.y()
+            self._draw_center_marker(circle, cx, cy, center_marker, color)
         
         txt_item = self._add_text_item(text, center.x(), center.y() - radius_px - 10, color, font_family, font_size)
         if txt_item:
             txt_item.setParentItem(circle)
+
+    def _draw_center_marker(self, parent, cx, cy, marker_type, color, size=10):
+        """Draw a center marker as a child of parent at local coords (cx, cy)."""
+        if marker_type == "circle":
+            s = size / 2
+            item = QGraphicsEllipseItem(cx - s, cy - s, size, size, parent)
+            pen = QPen(QColor(color), 1.5)
+            pen.setCosmetic(True)
+            item.setPen(pen)
+            item.setBrush(QColor(color))
+        elif marker_type == "cross":
+            s = size / 2
+            path = QPainterPath()
+            path.moveTo(cx - s, cy)
+            path.lineTo(cx + s, cy)
+            path.moveTo(cx, cy - s)
+            path.lineTo(cx, cy + s)
+            item = QGraphicsPathItem(path, parent)
+            pen = QPen(QColor(color), 2)
+            pen.setCosmetic(True)
+            item.setPen(pen)
+        elif marker_type == "x":
+            s = size / 2
+            path = QPainterPath()
+            path.moveTo(cx - s, cy - s)
+            path.lineTo(cx + s, cy + s)
+            path.moveTo(cx + s, cy - s)
+            path.lineTo(cx - s, cy + s)
+            item = QGraphicsPathItem(path, parent)
+            pen = QPen(QColor(color), 2)
+            pen.setCosmetic(True)
+            item.setPen(pen)
+        else:
+            return
+        item.setData(2, "marker")
+
+    def _draw_endpoint_marker(self, parent, point, neighbor, marker_type, color, size=10):
+        """Draw a start/end marker as a child of parent. point is where it goes, neighbor
+        is the adjacent point used to compute arrow direction."""
+        px, py = point.x(), point.y()
+        if marker_type == "circle":
+            s = size / 2
+            item = QGraphicsEllipseItem(px - s, py - s, size, size, parent)
+            pen = QPen(QColor(color), 1.5)
+            pen.setCosmetic(True)
+            item.setPen(pen)
+            item.setBrush(QColor(color))
+            item.setData(2, "marker")
+        elif marker_type == "arrow":
+            # Direction pointing away from the interior (outward)
+            dx = px - neighbor.x()
+            dy = py - neighbor.y()
+            length = math.sqrt(dx * dx + dy * dy)
+            if length == 0:
+                return
+            dx /= length
+            dy /= length
+            # Perpendicular
+            perp_x, perp_y = -dy, dx
+            # Arrow wings behind the tip
+            bx = px - dx * size
+            by = py - dy * size
+            wing1 = QPointF(bx + perp_x * size * 0.45, by + perp_y * size * 0.45)
+            wing2 = QPointF(bx - perp_x * size * 0.45, by - perp_y * size * 0.45)
+            path = QPainterPath()
+            path.moveTo(wing1)
+            path.lineTo(QPointF(px, py))
+            path.lineTo(wing2)
+            path.closeSubpath()
+            item = QGraphicsPathItem(path, parent)
+            pen = QPen(QColor(color), 1)
+            pen.setCosmetic(True)
+            item.setPen(pen)
+            item.setBrush(QColor(color))
+            item.setData(2, "marker")
 
     def add_text_annotation(self, pos, text, color="black", item_id=None, font_family="Arial", font_size=12, opacity=100):
         txt_item = self._add_text_item(text, pos.x(), pos.y(), color, font_family, font_size)
@@ -520,9 +609,34 @@ class PDFCanvas(QGraphicsView):
                             item.setBrush(fc)
                         else:
                             item.setBrush(Qt.NoBrush)
-                        
+
+                # Handle marker updates
+                has_marker_change = any(k in attrs for k in ("center_marker", "start_marker", "end_marker"))
+                if has_marker_change:
+                    # Remove existing marker children
+                    for child in list(item.childItems()):
+                        if child.data(2) == "marker":
+                            self.scene.removeItem(child)
+                    color_str = item.pen().color().name() if hasattr(item, 'pen') else "#7c4dff"
+                    if isinstance(item, QGraphicsEllipseItem) and "center_marker" in attrs:
+                        r = item.rect()
+                        cx, cy = r.center().x(), r.center().y()
+                        self._draw_center_marker(item, cx, cy, attrs["center_marker"], color_str)
+                    elif isinstance(item, QGraphicsPathItem):
+                        path = item.path()
+                        n = path.elementCount()
+                        if n >= 2:
+                            e0 = path.elementAt(0)
+                            e1 = path.elementAt(1)
+                            en = path.elementAt(n - 1)
+                            en1 = path.elementAt(n - 2)
+                            if "start_marker" in attrs and attrs["start_marker"]:
+                                self._draw_endpoint_marker(item, QPointF(e0.x, e0.y), QPointF(e1.x, e1.y), attrs["start_marker"], color_str)
+                            if "end_marker" in attrs and attrs["end_marker"]:
+                                self._draw_endpoint_marker(item, QPointF(en.x, en.y), QPointF(en1.x, en1.y), attrs["end_marker"], color_str)
+
                 text_items = [item] if isinstance(item, QGraphicsTextItem) else [child for child in item.childItems() if isinstance(child, QGraphicsTextItem)]
-                
+
                 for txt in text_items:
                     font = txt.font()
                     if "font_family" in attrs:
@@ -530,13 +644,36 @@ class PDFCanvas(QGraphicsView):
                     if "font_size" in attrs:
                         font.setPointSize(attrs["font_size"])
                     txt.setFont(font)
-                    
+
                     if "text" in attrs:
                         txt.setPlainText(attrs["text"])
                     if "color" in attrs:
                         txt.setDefaultTextColor(QColor(attrs["color"]))
                     if "opacity" in attrs:
                         txt.setOpacity(attrs["opacity"] / 100.0)
+
+                # If text is being set but no text child exists yet, create one
+                if "text" in attrs and attrs["text"].strip() and not text_items and not isinstance(item, QGraphicsTextItem):
+                    color_str = item.pen().color().name() if hasattr(item, 'pen') else "#7c4dff"
+                    ff = attrs.get("font_family", "Arial")
+                    fs = attrs.get("font_size", 12)
+                    if isinstance(item, QGraphicsEllipseItem):
+                        r = item.rect()
+                        tx, ty = r.center().x(), r.top() - 15
+                    elif isinstance(item, QGraphicsPolygonItem):
+                        br = item.polygon().boundingRect()
+                        tx, ty = br.center().x(), br.center().y()
+                    elif isinstance(item, QGraphicsPathItem):
+                        path = item.path()
+                        n = path.elementCount()
+                        mid = path.elementAt(n // 2)
+                        tx, ty = mid.x, mid.y - 15
+                    else:
+                        br = item.boundingRect()
+                        tx, ty = br.center().x(), br.top() - 15
+                    txt_new = self._add_text_item(attrs["text"], tx, ty, color_str, ff, fs)
+                    if txt_new:
+                        txt_new.setParentItem(item)
                 break
 
     def reset_view(self):

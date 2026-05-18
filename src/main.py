@@ -5,7 +5,7 @@ import fitz # PyMuPDF
 from PySide6.QtWidgets import (QApplication, QMainWindow, QFileDialog, 
                              QLabel, QHBoxLayout, QWidget, QVBoxLayout, 
                              QInputDialog, QMessageBox, QDockWidget, QPushButton, 
-                             QFrame, QSpacerItem, QSizePolicy, QFontComboBox, QSpinBox, QDoubleSpinBox, QColorDialog, QCheckBox)
+                             QFrame, QSpacerItem, QSizePolicy, QFontComboBox, QSpinBox, QDoubleSpinBox, QColorDialog, QCheckBox, QComboBox)
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QIcon, QAction, QFont, QColor
 import qtawesome as qta
@@ -35,6 +35,12 @@ class MainWindow(QMainWindow):
         self.current_shape_color = "#7c4dff"
         self.current_fill_color = ""
         self.current_line_width = 2
+        self.current_start_marker = ""
+        self.current_end_marker = ""
+        self.current_center_marker = ""
+        self._start_marker_values = ["", "circle", "arrow"]
+        self._end_marker_values = ["", "circle", "arrow"]
+        self._center_marker_values = ["", "circle", "cross", "x"]
 
         self.setup_ui()
         self._setup_menus()
@@ -207,7 +213,7 @@ class MainWindow(QMainWindow):
     def _setup_options_bar(self):
         self.options_bar = QFrame()
         self.options_bar.setObjectName("ToolOptionsBar")
-        self.options_bar.setFixedHeight(40)
+        self.options_bar.setMinimumHeight(40)
         o_layout = QHBoxLayout(self.options_bar)
         o_layout.setContentsMargins(15, 0, 15, 0)
 
@@ -264,6 +270,40 @@ class MainWindow(QMainWindow):
         radius_layout.addWidget(self.tool_radius_spin)
         shape_layout.addWidget(self.tool_radius_container)
 
+        # Line endpoint markers (shown for DRAW_LINE only)
+        self.tool_line_marker_container = QWidget()
+        lm_layout = QHBoxLayout(self.tool_line_marker_container)
+        lm_layout.setContentsMargins(0, 0, 0, 0)
+        lm_layout.addWidget(QLabel("始点:"))
+        self.tool_start_marker_combo = QComboBox()
+        self.tool_start_marker_combo.addItems(["なし", "丸", "矢印"])
+        self.tool_start_marker_combo.currentIndexChanged.connect(self._on_tool_start_marker_changed)
+        lm_layout.addWidget(self.tool_start_marker_combo)
+        lm_layout.addWidget(QLabel("終点:"))
+        self.tool_end_marker_combo = QComboBox()
+        self.tool_end_marker_combo.addItems(["なし", "丸", "矢印"])
+        self.tool_end_marker_combo.currentIndexChanged.connect(self._on_tool_end_marker_changed)
+        lm_layout.addWidget(self.tool_end_marker_combo)
+        shape_layout.addWidget(self.tool_line_marker_container)
+
+        # Circle center marker (shown for DRAW_CIRCLE_DRAG only)
+        self.tool_circle_marker_container = QWidget()
+        cm_layout = QHBoxLayout(self.tool_circle_marker_container)
+        cm_layout.setContentsMargins(0, 0, 0, 0)
+        cm_layout.addWidget(QLabel("中心点:"))
+        self.tool_center_marker_combo = QComboBox()
+        self.tool_center_marker_combo.addItems(["なし", "丸", "十字", "バツ"])
+        self.tool_center_marker_combo.currentIndexChanged.connect(self._on_tool_center_marker_changed)
+        cm_layout.addWidget(self.tool_center_marker_combo)
+        shape_layout.addWidget(self.tool_circle_marker_container)
+
+        # Continuous creation checkbox (all shape tools)
+        self.tool_shape_continuous_check = QCheckBox("連続作成")
+        self.tool_shape_continuous_check.setChecked(False)
+        self.tool_shape_continuous_check.setStyleSheet("color: white;")
+        self.tool_shape_continuous_check.toggled.connect(self._on_tool_shape_continuous_changed)
+        shape_layout.addWidget(self.tool_shape_continuous_check)
+
         o_layout.addWidget(self.shape_options_widget)
         self.shape_options_widget.hide()
 
@@ -310,6 +350,18 @@ class MainWindow(QMainWindow):
     def _on_tool_continuous_changed(self, checked):
         if self.canvas.tool_mode == ToolMode.TEXT:
             self.canvas.set_text_defaults(self.current_text_font, self.current_text_size, self.current_text_color, checked)
+
+    def _on_tool_shape_continuous_changed(self, checked):
+        self.canvas.set_shape_continuous(checked)
+
+    def _on_tool_start_marker_changed(self, index):
+        self.current_start_marker = self._start_marker_values[index]
+
+    def _on_tool_end_marker_changed(self, index):
+        self.current_end_marker = self._end_marker_values[index]
+
+    def _on_tool_center_marker_changed(self, index):
+        self.current_center_marker = self._center_marker_values[index]
 
     def _on_tool_line_width_changed(self, width):
         self.current_line_width = width
@@ -386,6 +438,8 @@ class MainWindow(QMainWindow):
         is_shape_tool = mode in [ToolMode.DRAW_LINE, ToolMode.POLYGON_AREA, ToolMode.DRAW_CIRCLE_DRAG]
         has_fill = mode in [ToolMode.POLYGON_AREA, ToolMode.DRAW_CIRCLE_DRAG]
         has_radius = mode == ToolMode.DRAW_CIRCLE_DRAG and self.model.is_calibrated
+        has_line_markers = mode == ToolMode.DRAW_LINE
+        has_circle_marker = mode == ToolMode.DRAW_CIRCLE_DRAG
 
         if mode == ToolMode.TEXT:
             self.default_opt_label.hide()
@@ -397,8 +451,11 @@ class MainWindow(QMainWindow):
             self.text_options_widget.hide()
             self.tool_fill_container.setVisible(has_fill)
             self.tool_radius_container.setVisible(has_radius)
+            self.tool_line_marker_container.setVisible(has_line_markers)
+            self.tool_circle_marker_container.setVisible(has_circle_marker)
             self.shape_options_widget.show()
             self._update_canvas_shape_defaults()
+            self.canvas.set_shape_continuous(self.tool_shape_continuous_check.isChecked())
         else:
             self.default_opt_label.show()
             self.shape_options_widget.hide()
@@ -435,9 +492,13 @@ class MainWindow(QMainWindow):
         ann = self._add_to_model("polyline", points, real_value=0.0, text="")
         ann.color = self.current_shape_color
         ann.line_width = self.current_line_width
+        ann.start_marker = self.current_start_marker
+        ann.end_marker = self.current_end_marker
         self.canvas.add_polyline_annotation(points, text="", color=ann.color, item_id=ann.id,
                                             font_family=ann.font_family, font_size=ann.font_size,
-                                            line_width=ann.line_width)
+                                            line_width=ann.line_width,
+                                            start_marker=ann.start_marker,
+                                            end_marker=ann.end_marker)
 
     def on_circle_drag_complete(self, center, radius_px):
         import math
@@ -450,9 +511,11 @@ class MainWindow(QMainWindow):
         ann.line_width = self.current_line_width
         ann.fill_color = self.current_fill_color
         ann.radius_px = radius_px
+        ann.center_marker = self.current_center_marker
         self.canvas.add_circle_annotation(center, radius_px, text="", color=ann.color, item_id=ann.id,
                                           font_family=ann.font_family, font_size=ann.font_size,
-                                          line_width=ann.line_width, fill_color=ann.fill_color)
+                                          line_width=ann.line_width, fill_color=ann.fill_color,
+                                          center_marker=ann.center_marker)
 
     def on_point_selected(self, pos):
         if self.canvas.tool_mode == ToolMode.CIRCLE_FIXED:
@@ -493,7 +556,8 @@ class MainWindow(QMainWindow):
                 # Refresh selection in property panel
                 self.prop_panel.set_item_data(ann.id, ann.type, ann.text, ann.color,
                                               ann.font_family, ann.font_size, ann.line_width,
-                                              ann.opacity, ann.fill_color)
+                                              ann.opacity, ann.fill_color,
+                                              ann.center_marker, ann.start_marker, ann.end_marker)
                 break
 
     def on_request_tool_change(self, mode):
@@ -542,7 +606,8 @@ class MainWindow(QMainWindow):
             if ann.id == item_id:
                 self.prop_panel.set_item_data(ann.id, ann.type, ann.text, ann.color,
                                               ann.font_family, ann.font_size, ann.line_width,
-                                              ann.opacity, ann.fill_color)
+                                              ann.opacity, ann.fill_color,
+                                              ann.center_marker, ann.start_marker, ann.end_marker)
                 break
 
     def on_selection_cleared(self):
@@ -558,6 +623,9 @@ class MainWindow(QMainWindow):
                 if "font_size" in attrs: ann.font_size = attrs["font_size"]
                 if "line_width" in attrs: ann.line_width = attrs["line_width"]
                 if "opacity" in attrs: ann.opacity = attrs["opacity"]
+                if "center_marker" in attrs: ann.center_marker = attrs["center_marker"]
+                if "start_marker" in attrs: ann.start_marker = attrs["start_marker"]
+                if "end_marker" in attrs: ann.end_marker = attrs["end_marker"]
                 self.canvas.update_item_properties(item_id, attrs)
                 break
 
@@ -703,7 +771,7 @@ class MainWindow(QMainWindow):
                     if ann.type == "line":
                         self.canvas.add_line_annotation(ann.points[0], ann.points[1], text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, line_width=ann.line_width, opacity=ann.opacity)
                     elif ann.type == "polyline":
-                        self.canvas.add_polyline_annotation(ann.points, text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, line_width=ann.line_width, opacity=ann.opacity)
+                        self.canvas.add_polyline_annotation(ann.points, text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, line_width=ann.line_width, opacity=ann.opacity, start_marker=ann.start_marker, end_marker=ann.end_marker)
                     elif ann.type == "polygon":
                         self.canvas.add_polygon_annotation(ann.points, text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, line_width=ann.line_width, opacity=ann.opacity, fill_color=ann.fill_color)
                     elif ann.type == "circle":
@@ -713,7 +781,7 @@ class MainWindow(QMainWindow):
                             radius_px = ann.real_value / self.model.scale_factor
                         else:
                             radius_px = 0
-                        self.canvas.add_circle_annotation(ann.points[0], radius_px, text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, line_width=ann.line_width, opacity=ann.opacity, fill_color=ann.fill_color)
+                        self.canvas.add_circle_annotation(ann.points[0], radius_px, text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, line_width=ann.line_width, opacity=ann.opacity, fill_color=ann.fill_color, center_marker=ann.center_marker)
                     elif ann.type == "text":
                         self.canvas.add_text_annotation(ann.points[0], ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, opacity=ann.opacity)
 

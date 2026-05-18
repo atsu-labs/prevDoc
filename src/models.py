@@ -64,6 +64,9 @@ class Annotation:
         self.opacity = 100
         self.real_value = 0.0
         self.radius_px = 0.0  # For circle: radius in pixels (stored when uncalibrated)
+        self.center_marker = ""  # For circles: "", "circle", "cross", "x"
+        self.start_marker = ""   # For polylines: "", "circle", "arrow"
+        self.end_marker = ""     # For polylines: "", "circle", "arrow"
         self.page_num = 0
 
     def to_dict(self):
@@ -87,6 +90,9 @@ class Annotation:
             "opacity": self.opacity,
             "real_value": self.real_value,
             "radius_px": self.radius_px,
+            "center_marker": self.center_marker,
+            "start_marker": self.start_marker,
+            "end_marker": self.end_marker,
             "page_num": self.page_num
         }
 
@@ -105,5 +111,8 @@ class Annotation:
         ann.opacity = data.get("opacity", 100)
         ann.real_value = data.get("real_value", 0.0)
         ann.radius_px = data.get("radius_px", 0.0)
+        ann.center_marker = data.get("center_marker", "")
+        ann.start_marker = data.get("start_marker", "")
+        ann.end_marker = data.get("end_marker", "")
         ann.page_num = data.get("page_num", 0)
         return ann
