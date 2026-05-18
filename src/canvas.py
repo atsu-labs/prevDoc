@@ -189,15 +189,30 @@ class PDFCanvas(QGraphicsView):
                     item = item.parentItem()
                 
                 if item and item != self.background_item and item.data(0):
-                    # Select ONLY this item
+                    # Our hit-test found the item — select it directly
                     self.scene.clearSelection()
                     item.setSelected(True)
                     self.item_selected.emit(item.data(0))
-                else:
-                    self.scene.clearSelection()
-                    self.selection_cleared.emit()
-                self.viewport().update() # Ensure feedback is drawn
+                    self.viewport().update()
+                    super().mousePressEvent(event)
+                    return
+                # Our hit-test missed — clear and let Qt's built-in selection try
+                self.scene.clearSelection()
             super().mousePressEvent(event)
+            # After Qt's selection attempt, check what ended up selected
+            if event.button() == Qt.LeftButton:
+                selected = self.scene.selectedItems()
+                if selected:
+                    top = selected[0]
+                    while top and not top.data(0) and top.parentItem():
+                        top = top.parentItem()
+                    if top and top.data(0) and top != self.background_item:
+                        self.item_selected.emit(top.data(0))
+                    else:
+                        self.selection_cleared.emit()
+                else:
+                    self.selection_cleared.emit()
+                self.viewport().update()
             return
 
         if self.tool_mode == ToolMode.NONE:

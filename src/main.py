@@ -626,6 +626,12 @@ class MainWindow(QMainWindow):
                 if "center_marker" in attrs: ann.center_marker = attrs["center_marker"]
                 if "start_marker" in attrs: ann.start_marker = attrs["start_marker"]
                 if "end_marker" in attrs: ann.end_marker = attrs["end_marker"]
+                # When any marker changed, always include ALL current marker values so
+                # canvas can redraw both endpoints without losing the unchanged one
+                if any(k in attrs for k in ("start_marker", "end_marker", "center_marker")):
+                    attrs["start_marker"] = ann.start_marker
+                    attrs["end_marker"] = ann.end_marker
+                    attrs["center_marker"] = ann.center_marker
                 self.canvas.update_item_properties(item_id, attrs)
                 break
 
