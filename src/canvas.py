@@ -320,9 +320,9 @@ class PDFCanvas(QGraphicsView):
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.LeftButton and self.tool_mode == ToolMode.DRAW_LINE:
-            # The single-click that fired before this double-click already appended the last
-            # point; remove it so the path ends at the previous point.
-            if len(self.temp_points) > 2:
+            # The single-click that fired before this double-click already appended a point;
+            # remove it so the path ends at the previous point.
+            if len(self.temp_points) >= 2:
                 self.temp_points.pop()
             if len(self.temp_points) >= 2:
                 self.polyline_complete.emit(self.temp_points[:])
