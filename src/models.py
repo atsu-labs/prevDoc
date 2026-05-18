@@ -53,15 +53,20 @@ class DrawingModel:
 class Annotation:
     def __init__(self, type):
         self.id = str(uuid.uuid4())
-        self.type = type # 'line', 'polygon', 'circle', 'text'
+        self.type = type # 'line', 'polyline', 'polygon', 'circle', 'text'
         self.points = [] # List of QPointF or (x,y) tuples? internally let's use QPointF
         self.color = "#7c4dff"
+        self.fill_color = ""  # Optional fill color; empty means derive from color
         self.text = ""
         self.font_family = "Arial"
         self.font_size = 12
         self.line_width = 2
         self.opacity = 100
         self.real_value = 0.0
+        self.radius_px = 0.0  # For circle: radius in pixels (stored when uncalibrated)
+        self.center_marker = ""  # For circles: "", "circle", "cross", "x"
+        self.start_marker = ""   # For polylines: "", "circle", "arrow"
+        self.end_marker = ""     # For polylines: "", "circle", "arrow"
         self.page_num = 0
 
     def to_dict(self):
@@ -77,12 +82,17 @@ class Annotation:
             "type": self.type,
             "points": pts,
             "color": self.color,
+            "fill_color": self.fill_color,
             "text": self.text,
             "font_family": self.font_family,
             "font_size": self.font_size,
             "line_width": self.line_width,
             "opacity": self.opacity,
             "real_value": self.real_value,
+            "radius_px": self.radius_px,
+            "center_marker": self.center_marker,
+            "start_marker": self.start_marker,
+            "end_marker": self.end_marker,
             "page_num": self.page_num
         }
 
@@ -93,11 +103,16 @@ class Annotation:
         ann.id = data.get("id", str(uuid.uuid4()))
         ann.points = [QPointF(p[0], p[1]) for p in data.get("points", [])]
         ann.color = data.get("color", "#7c4dff")
+        ann.fill_color = data.get("fill_color", "")
         ann.text = data.get("text", "")
         ann.font_family = data.get("font_family", "Arial")
         ann.font_size = data.get("font_size", 12)
         ann.line_width = data.get("line_width", 2)
         ann.opacity = data.get("opacity", 100)
         ann.real_value = data.get("real_value", 0.0)
+        ann.radius_px = data.get("radius_px", 0.0)
+        ann.center_marker = data.get("center_marker", "")
+        ann.start_marker = data.get("start_marker", "")
+        ann.end_marker = data.get("end_marker", "")
         ann.page_num = data.get("page_num", 0)
         return ann
