@@ -5,7 +5,7 @@ import fitz # PyMuPDF
 from PySide6.QtWidgets import (QApplication, QMainWindow, QFileDialog, 
                              QLabel, QHBoxLayout, QWidget, QVBoxLayout, 
                              QInputDialog, QMessageBox, QDockWidget, QPushButton, 
-                             QFrame, QSpacerItem, QSizePolicy, QFontComboBox, QSpinBox, QColorDialog, QCheckBox)
+                             QFrame, QSpacerItem, QSizePolicy, QFontComboBox, QSpinBox, QDoubleSpinBox, QColorDialog, QCheckBox)
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QIcon, QAction, QFont, QColor
 import qtawesome as qta
@@ -30,6 +30,11 @@ class MainWindow(QMainWindow):
         self.current_text_font = "Arial"
         self.current_text_size = 12
         self.current_text_color = "#ff0000"
+
+        # Shape tool defaults
+        self.current_shape_color = "#7c4dff"
+        self.current_fill_color = ""
+        self.current_line_width = 2
 
         self.setup_ui()
         self._setup_menus()
@@ -104,6 +109,8 @@ class MainWindow(QMainWindow):
         self.canvas.measurement_complete.connect(self.on_measurement_complete)
         self.canvas.polygon_complete.connect(self.on_polygon_complete)
         self.canvas.point_selected.connect(self.on_point_selected)
+        self.canvas.polyline_complete.connect(self.on_polyline_complete)
+        self.canvas.circle_drag_complete.connect(self.on_circle_drag_complete)
         self.canvas.item_selected.connect(self.on_item_selected)
         self.canvas.selection_cleared.connect(self.on_selection_cleared)
         self.canvas.item_moved.connect(self.on_item_moved)
@@ -117,6 +124,7 @@ class MainWindow(QMainWindow):
         self.prop_panel.setFixedWidth(280)
         self.prop_panel.attribute_changed.connect(self.on_property_changed)
         self.prop_panel.delete_requested.connect(self.on_delete_item)
+        self.prop_panel.calculate_requested.connect(self.on_calculate_requested)
         content_area.addWidget(self.prop_panel)
 
         self.main_layout.addLayout(content_area)
@@ -166,12 +174,13 @@ class MainWindow(QMainWindow):
         tools = [
             ('fa5s.mouse-pointer', "選択", ToolMode.SELECT),
             ('fa5s.hand-paper', "パン", ToolMode.NONE),
+            ('fa5s.pencil-alt', "直線（折れ線）", ToolMode.DRAW_LINE),
             ('fa5s.square', "矩形", ToolMode.POLYGON_AREA),
+            ('fa5s.circle', "円", ToolMode.DRAW_CIRCLE_DRAG),
             ('fa5s.font', "テキスト", ToolMode.TEXT),
-            ('fa5s.pen', "ペン", ToolMode.MEASURE_LINE),
-            ('fa5s.circle', "15m円", ToolMode.CIRCLE_FIXED),
-            ('fa5s.ruler', "計測", ToolMode.CALIBRATE),
-            ('fa5s.comment', "コメント", ToolMode.TEXT)
+            ('fa5s.ruler', "計測ライン", ToolMode.MEASURE_LINE),
+            ('fa5s.bullseye', "15m円（計測）", ToolMode.CIRCLE_FIXED),
+            ('fa5s.drafting-compass', "キャリブレーション", ToolMode.CALIBRATE),
         ]
 
         self.tool_btns = []
@@ -205,6 +214,60 @@ class MainWindow(QMainWindow):
         self.default_opt_label = QLabel("ツールプロパティ: 未選択")
         o_layout.addWidget(self.default_opt_label)
         
+        # --- Shape tool options ---
+        self.shape_options_widget = QWidget()
+        shape_layout = QHBoxLayout(self.shape_options_widget)
+        shape_layout.setContentsMargins(0, 0, 0, 0)
+
+        shape_layout.addWidget(QLabel("線の太さ:"))
+        self.tool_line_width_spin = QSpinBox()
+        self.tool_line_width_spin.setRange(1, 20)
+        self.tool_line_width_spin.setValue(self.current_line_width)
+        self.tool_line_width_spin.valueChanged.connect(self._on_tool_line_width_changed)
+        shape_layout.addWidget(self.tool_line_width_spin)
+
+        shape_layout.addWidget(QLabel("線の色:"))
+        self.tool_shape_color_preview = QFrame()
+        self.tool_shape_color_preview.setFixedSize(20, 20)
+        self.tool_shape_color_preview.setStyleSheet(f"background-color: {self.current_shape_color}; border-radius: 4px;")
+        shape_layout.addWidget(self.tool_shape_color_preview)
+        self.tool_shape_color_btn = QPushButton("変更")
+        self.tool_shape_color_btn.clicked.connect(self._on_tool_shape_color_clicked)
+        shape_layout.addWidget(self.tool_shape_color_btn)
+
+        # Fill color (shown for polygon and circle tools)
+        self.tool_fill_container = QWidget()
+        fill_layout = QHBoxLayout(self.tool_fill_container)
+        fill_layout.setContentsMargins(0, 0, 0, 0)
+        fill_layout.addWidget(QLabel("塗りの色:"))
+        self.tool_fill_color_preview = QFrame()
+        self.tool_fill_color_preview.setFixedSize(20, 20)
+        self.tool_fill_color_preview.setStyleSheet("background-color: transparent; border: 1px solid #888; border-radius: 4px;")
+        fill_layout.addWidget(self.tool_fill_color_preview)
+        self.tool_fill_color_btn = QPushButton("変更")
+        self.tool_fill_color_btn.clicked.connect(self._on_tool_fill_color_clicked)
+        fill_layout.addWidget(self.tool_fill_color_btn)
+        self.tool_fill_clear_btn = QPushButton("なし")
+        self.tool_fill_clear_btn.clicked.connect(self._on_tool_fill_color_cleared)
+        fill_layout.addWidget(self.tool_fill_clear_btn)
+        shape_layout.addWidget(self.tool_fill_container)
+
+        # Radius input for calibrated circle tool
+        self.tool_radius_container = QWidget()
+        radius_layout = QHBoxLayout(self.tool_radius_container)
+        radius_layout.setContentsMargins(0, 0, 0, 0)
+        radius_layout.addWidget(QLabel("半径:"))
+        self.tool_radius_spin = QDoubleSpinBox()
+        self.tool_radius_spin.setRange(0.1, 1000000)
+        self.tool_radius_spin.setValue(15000)
+        self.tool_radius_spin.setSuffix(" mm")
+        radius_layout.addWidget(self.tool_radius_spin)
+        shape_layout.addWidget(self.tool_radius_container)
+
+        o_layout.addWidget(self.shape_options_widget)
+        self.shape_options_widget.hide()
+
+        # --- Text tool options ---
         self.text_options_widget = QWidget()
         text_layout = QHBoxLayout(self.text_options_widget)
         text_layout.setContentsMargins(0, 0, 0, 0)
@@ -248,6 +311,33 @@ class MainWindow(QMainWindow):
         if self.canvas.tool_mode == ToolMode.TEXT:
             self.canvas.set_text_defaults(self.current_text_font, self.current_text_size, self.current_text_color, checked)
 
+    def _on_tool_line_width_changed(self, width):
+        self.current_line_width = width
+        self._update_canvas_shape_defaults()
+
+    def _on_tool_shape_color_clicked(self):
+        color = QColorDialog.getColor(QColor(self.current_shape_color))
+        if color.isValid():
+            self.current_shape_color = color.name()
+            self.tool_shape_color_preview.setStyleSheet(f"background-color: {self.current_shape_color}; border-radius: 4px;")
+            self._update_canvas_shape_defaults()
+
+    def _on_tool_fill_color_clicked(self):
+        initial = QColor(self.current_fill_color) if self.current_fill_color else QColor("#7c4dff")
+        color = QColorDialog.getColor(initial)
+        if color.isValid():
+            self.current_fill_color = color.name()
+            self.tool_fill_color_preview.setStyleSheet(f"background-color: {self.current_fill_color}; border-radius: 4px;")
+            self._update_canvas_shape_defaults()
+
+    def _on_tool_fill_color_cleared(self):
+        self.current_fill_color = ""
+        self.tool_fill_color_preview.setStyleSheet("background-color: transparent; border: 1px solid #888; border-radius: 4px;")
+        self._update_canvas_shape_defaults()
+
+    def _update_canvas_shape_defaults(self):
+        self.canvas.set_shape_defaults(self.current_shape_color, self.current_line_width, self.current_fill_color)
+
     def _on_tool_font_changed(self, font):
         self.current_text_font = font.family()
 
@@ -284,20 +374,34 @@ class MainWindow(QMainWindow):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
         
-        if mode in [ToolMode.MEASURE_LINE, ToolMode.POLYGON_AREA, ToolMode.CIRCLE_FIXED]:
-            if not self.model.is_calibrated and mode != ToolMode.CALIBRATE:
+        # Only measurement tools (not drawing tools) require calibration
+        if mode in [ToolMode.MEASURE_LINE, ToolMode.CIRCLE_FIXED]:
+            if not self.model.is_calibrated:
                 QMessageBox.warning(self, "警告", "先にキャリブレーションを行ってください。")
                 active_btn.setChecked(False)
                 return
 
         self.canvas.set_tool_mode(mode)
         
+        is_shape_tool = mode in [ToolMode.DRAW_LINE, ToolMode.POLYGON_AREA, ToolMode.DRAW_CIRCLE_DRAG]
+        has_fill = mode in [ToolMode.POLYGON_AREA, ToolMode.DRAW_CIRCLE_DRAG]
+        has_radius = mode == ToolMode.DRAW_CIRCLE_DRAG and self.model.is_calibrated
+
         if mode == ToolMode.TEXT:
             self.default_opt_label.hide()
+            self.shape_options_widget.hide()
             self.text_options_widget.show()
             self.canvas.set_text_defaults(self.current_text_font, self.current_text_size, self.current_text_color, self.tool_continuous_check.isChecked())
+        elif is_shape_tool:
+            self.default_opt_label.hide()
+            self.text_options_widget.hide()
+            self.tool_fill_container.setVisible(has_fill)
+            self.tool_radius_container.setVisible(has_radius)
+            self.shape_options_widget.show()
+            self._update_canvas_shape_defaults()
         else:
             self.default_opt_label.show()
+            self.shape_options_widget.hide()
             self.text_options_widget.hide()
 
     def go_to_page(self, page_idx):
@@ -318,11 +422,37 @@ class MainWindow(QMainWindow):
         self.canvas.add_line_annotation(p1, p2, text=text, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size)
 
     def on_polygon_complete(self, points):
-        area_mm2 = self.model.calculate_real_area(points)
-        area_m2 = area_mm2 / 1_000_000.0
-        text = f"{area_m2:.2f} m²"
-        ann = self._add_to_model("polygon", points, area_mm2, text=text)
-        self.canvas.add_polygon_annotation(points, text=text, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size)
+        # No automatic calculation; user clicks 計算 button in properties to compute
+        ann = self._add_to_model("polygon", points, real_value=0.0, text="")
+        ann.color = self.current_shape_color
+        ann.line_width = self.current_line_width
+        ann.fill_color = self.current_fill_color
+        self.canvas.add_polygon_annotation(points, text="", color=ann.color, item_id=ann.id,
+                                           font_family=ann.font_family, font_size=ann.font_size,
+                                           line_width=ann.line_width, fill_color=ann.fill_color)
+
+    def on_polyline_complete(self, points):
+        ann = self._add_to_model("polyline", points, real_value=0.0, text="")
+        ann.color = self.current_shape_color
+        ann.line_width = self.current_line_width
+        self.canvas.add_polyline_annotation(points, text="", color=ann.color, item_id=ann.id,
+                                            font_family=ann.font_family, font_size=ann.font_size,
+                                            line_width=ann.line_width)
+
+    def on_circle_drag_complete(self, center, radius_px):
+        import math
+        # If radius is ~0 (click without drag) and calibrated, use radius from tool options
+        if radius_px < 3 and self.model.is_calibrated:
+            radius_mm = self.tool_radius_spin.value()
+            radius_px = radius_mm / self.model.scale_factor
+        ann = self._add_to_model("circle", [center], real_value=0.0, text="")
+        ann.color = self.current_shape_color
+        ann.line_width = self.current_line_width
+        ann.fill_color = self.current_fill_color
+        ann.radius_px = radius_px
+        self.canvas.add_circle_annotation(center, radius_px, text="", color=ann.color, item_id=ann.id,
+                                          font_family=ann.font_family, font_size=ann.font_size,
+                                          line_width=ann.line_width, fill_color=ann.fill_color)
 
     def on_point_selected(self, pos):
         if self.canvas.tool_mode == ToolMode.CIRCLE_FIXED:
@@ -330,7 +460,41 @@ class MainWindow(QMainWindow):
             radius_px = radius_mm / self.model.scale_factor
             text = "R=15m"
             ann = self._add_to_model("circle", [pos], radius_mm, text=text)
+            ann.radius_px = radius_px
             self.canvas.add_circle_annotation(pos, radius_px, text=text, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size)
+
+    def on_calculate_requested(self, item_id):
+        import math
+        if not self.model.is_calibrated:
+            QMessageBox.warning(self, "警告", "キャリブレーションが完了していません。先にキャリブレーションを行ってください。")
+            return
+        for ann in self.model.annotations:
+            if ann.id == item_id:
+                if ann.type == "polyline" and len(ann.points) >= 2:
+                    total = sum(
+                        math.sqrt((ann.points[i+1].x() - ann.points[i].x())**2 +
+                                  (ann.points[i+1].y() - ann.points[i].y())**2)
+                        * self.model.scale_factor
+                        for i in range(len(ann.points) - 1)
+                    )
+                    ann.real_value = total
+                    ann.text = f"{total:.1f} mm"
+                elif ann.type == "polygon" and len(ann.points) >= 3:
+                    area_mm2 = self.model.calculate_real_area(ann.points)
+                    area_m2 = area_mm2 / 1_000_000.0
+                    ann.real_value = area_mm2
+                    ann.text = f"{area_m2:.2f} m²"
+                elif ann.type == "circle":
+                    radius_px = ann.radius_px if ann.radius_px > 0 else (ann.real_value / self.model.scale_factor if ann.real_value > 0 else 0)
+                    radius_mm = radius_px * self.model.scale_factor
+                    ann.real_value = radius_mm
+                    ann.text = f"R={radius_mm:.1f} mm"
+                self.canvas.update_item_properties(item_id, {"text": ann.text})
+                # Refresh selection in property panel
+                self.prop_panel.set_item_data(ann.id, ann.type, ann.text, ann.color,
+                                              ann.font_family, ann.font_size, ann.line_width,
+                                              ann.opacity, ann.fill_color)
+                break
 
     def on_request_tool_change(self, mode):
         for btn in self.tool_btns:
@@ -376,7 +540,9 @@ class MainWindow(QMainWindow):
     def on_item_selected(self, item_id):
         for ann in self.model.annotations:
             if ann.id == item_id:
-                self.prop_panel.set_item_data(ann.id, ann.type, ann.text, ann.color, ann.font_family, ann.font_size, ann.line_width, ann.opacity)
+                self.prop_panel.set_item_data(ann.id, ann.type, ann.text, ann.color,
+                                              ann.font_family, ann.font_size, ann.line_width,
+                                              ann.opacity, ann.fill_color)
                 break
 
     def on_selection_cleared(self):
@@ -387,6 +553,7 @@ class MainWindow(QMainWindow):
             if ann.id == item_id:
                 if "text" in attrs: ann.text = attrs["text"]
                 if "color" in attrs: ann.color = attrs["color"]
+                if "fill_color" in attrs: ann.fill_color = attrs["fill_color"]
                 if "font_family" in attrs: ann.font_family = attrs["font_family"]
                 if "font_size" in attrs: ann.font_size = attrs["font_size"]
                 if "line_width" in attrs: ann.line_width = attrs["line_width"]
@@ -482,6 +649,14 @@ class MainWindow(QMainWindow):
                     mid = (p1 + p2) / 2
                     page.insert_text(mid, ann.text, color=color, fontsize=ann.font_size, fontname="helv", fill_opacity=fill_opacity)
             
+            elif ann.type == "polyline":
+                pts = [to_pdf_pt(p) for p in ann.points]
+                for i in range(len(pts) - 1):
+                    page.draw_line(pts[i], pts[i+1], color=color, width=ann.line_width, stroke_opacity=fill_opacity)
+                if ann.text and pts:
+                    mid = pts[len(pts) // 2]
+                    page.insert_text(mid, ann.text, color=color, fontsize=ann.font_size, fontname="helv", fill_opacity=fill_opacity)
+            
             elif ann.type == "polygon":
                 pts = [to_pdf_pt(p) for p in ann.points]
                 page.draw_polyline(pts + [pts[0]], color=color, width=ann.line_width, stroke_opacity=fill_opacity)
@@ -492,8 +667,14 @@ class MainWindow(QMainWindow):
             
             elif ann.type == "circle":
                 center = to_pdf_pt(ann.points[0])
-                radius = (ann.real_value / self.model.scale_factor) * dpi_factor
-                page.draw_circle(center, radius, color=color, width=ann.line_width, stroke_opacity=fill_opacity)
+                if ann.radius_px > 0:
+                    radius = ann.radius_px * dpi_factor
+                elif ann.real_value > 0 and self.model.scale_factor > 0:
+                    radius = (ann.real_value / self.model.scale_factor) * dpi_factor
+                else:
+                    radius = 0
+                if radius > 0:
+                    page.draw_circle(center, radius, color=color, width=ann.line_width, stroke_opacity=fill_opacity)
                 if ann.text:
                     page.insert_text((center.x, center.y - radius - 5), ann.text, color=color, fontsize=ann.font_size, fontname="helv", fill_opacity=fill_opacity)
             
@@ -521,16 +702,20 @@ class MainWindow(QMainWindow):
                 if ann.page_num == self.current_page:
                     if ann.type == "line":
                         self.canvas.add_line_annotation(ann.points[0], ann.points[1], text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, line_width=ann.line_width, opacity=ann.opacity)
+                    elif ann.type == "polyline":
+                        self.canvas.add_polyline_annotation(ann.points, text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, line_width=ann.line_width, opacity=ann.opacity)
                     elif ann.type == "polygon":
-                        self.canvas.add_polygon_annotation(ann.points, text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, line_width=ann.line_width, opacity=ann.opacity)
+                        self.canvas.add_polygon_annotation(ann.points, text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, line_width=ann.line_width, opacity=ann.opacity, fill_color=ann.fill_color)
                     elif ann.type == "circle":
-                        radius_px = ann.real_value / self.model.scale_factor
-                        self.canvas.add_circle_annotation(ann.points[0], radius_px, text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, line_width=ann.line_width, opacity=ann.opacity)
+                        if ann.radius_px > 0:
+                            radius_px = ann.radius_px
+                        elif ann.real_value > 0 and self.model.scale_factor > 0:
+                            radius_px = ann.real_value / self.model.scale_factor
+                        else:
+                            radius_px = 0
+                        self.canvas.add_circle_annotation(ann.points[0], radius_px, text=ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, line_width=ann.line_width, opacity=ann.opacity, fill_color=ann.fill_color)
                     elif ann.type == "text":
                         self.canvas.add_text_annotation(ann.points[0], ann.text, color=ann.color, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size, opacity=ann.opacity)
-            
-            if not self.model.pdf_path:
-                pass 
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_O and event.modifiers() & Qt.ControlModifier:

@@ -1,6 +1,7 @@
-from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsLineItem, QGraphicsTextItem, QGraphicsEllipseItem, QGraphicsPolygonItem, QMenu, QGraphicsItem
+from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsLineItem, QGraphicsTextItem, QGraphicsEllipseItem, QGraphicsPolygonItem, QGraphicsPathItem, QMenu, QGraphicsItem
 from PySide6.QtCore import Qt, Signal, QPointF, QRectF
-from PySide6.QtGui import QPainter, QPen, QColor, QPolygonF, QAction, QFont
+from PySide6.QtGui import QPainter, QPen, QColor, QPolygonF, QAction, QFont, QPainterPath
+import math
 
 class CustomTextItem(QGraphicsTextItem):
     editing_finished = Signal(str)
@@ -29,12 +30,16 @@ class ToolMode:
     POLYGON_AREA = 4
     TEXT = 5
     SELECT = 6
+    DRAW_LINE = 7       # Polyline drawing (no calibration required)
+    DRAW_CIRCLE_DRAG = 8  # Circle by dragging center→radius (no calibration required)
 
 class PDFCanvas(QGraphicsView):
     calibration_points_selected = Signal(QPointF, QPointF)
     measurement_complete = Signal(QPointF, QPointF)
     polygon_complete = Signal(list) # list of QPointF
     point_selected = Signal(QPointF) # For circle and text
+    polyline_complete = Signal(list)  # list of QPointF for polyline tool
+    circle_drag_complete = Signal(QPointF, float)  # center, radius_px
     
     # Selection/Editing signals
     item_selected = Signal(str) # id
@@ -67,6 +72,13 @@ class PDFCanvas(QGraphicsView):
         self.temp_points = []
         self.temp_line = None
         self.temp_poly = None
+        self.temp_circle = None
+        self.drag_start = None  # For DRAW_CIRCLE_DRAG
+        
+        # Shape default properties (used by drawing tools)
+        self.current_shape_color = "#7c4dff"
+        self.current_shape_line_width = 2
+        self.current_fill_color = ""
         
         # Text default properties
         self.current_text_font = "Arial"
@@ -80,6 +92,11 @@ class PDFCanvas(QGraphicsView):
         self.current_text_size = font_size
         self.current_text_color = color
         self.continuous_text_input = continuous
+
+    def set_shape_defaults(self, line_color, line_width, fill_color=""):
+        self.current_shape_color = line_color
+        self.current_shape_line_width = line_width
+        self.current_fill_color = fill_color
 
     def set_tool_mode(self, mode):
         self.tool_mode = mode
@@ -116,6 +133,10 @@ class PDFCanvas(QGraphicsView):
         if self.temp_poly:
             self.scene.removeItem(self.temp_poly)
             self.temp_poly = None
+        if self.temp_circle:
+            self.scene.removeItem(self.temp_circle)
+            self.temp_circle = None
+        self.drag_start = None
 
     def set_page_image(self, pixmap):
         self.scene.clear()
@@ -198,16 +219,31 @@ class PDFCanvas(QGraphicsView):
                         self.measurement_complete.emit(p1, p2)
                     self._finish_tool()
 
+            elif self.tool_mode == ToolMode.DRAW_LINE:
+                self.temp_points.append(pos)
+                if not self.temp_poly:
+                    self.temp_poly = QGraphicsPathItem()
+                    pen = QPen(QColor(self.current_shape_color), self.current_shape_line_width)
+                    pen.setCosmetic(True)
+                    self.temp_poly.setPen(pen)
+                    self.scene.addItem(self.temp_poly)
+                self._update_temp_polyline_path()
+
             elif self.tool_mode == ToolMode.POLYGON_AREA:
                 self.temp_points.append(pos)
                 if not self.temp_poly:
                     self.temp_poly = QGraphicsPolygonItem()
-                    pen = QPen(QColor(124, 77, 255), 2)
+                    pen = QPen(QColor(self.current_shape_color), self.current_shape_line_width)
                     pen.setCosmetic(True)
                     self.temp_poly.setPen(pen)
-                    self.temp_poly.setBrush(QColor(124, 77, 255, 50))
+                    fill = QColor(self.current_fill_color) if self.current_fill_color else QColor(self.current_shape_color)
+                    fill.setAlpha(50)
+                    self.temp_poly.setBrush(fill)
                     self.scene.addItem(self.temp_poly)
                 self.temp_poly.setPolygon(QPolygonF(self.temp_points))
+
+            elif self.tool_mode == ToolMode.DRAW_CIRCLE_DRAG:
+                self.drag_start = pos
 
             elif self.tool_mode == ToolMode.CIRCLE_FIXED:
                 self.point_selected.emit(pos)
@@ -233,6 +269,20 @@ class PDFCanvas(QGraphicsView):
             if self.tool_mode == ToolMode.POLYGON_AREA and len(self.temp_points) >= 3:
                 self.polygon_complete.emit(self.temp_points)
                 self._finish_tool(ToolMode.SELECT)
+            elif self.tool_mode == ToolMode.DRAW_LINE and len(self.temp_points) >= 2:
+                self.polyline_complete.emit(self.temp_points[:])
+                self._finish_tool(ToolMode.SELECT)
+
+    def _update_temp_polyline_path(self, preview_end=None):
+        if not self.temp_poly or not self.temp_points:
+            return
+        path = QPainterPath()
+        path.moveTo(self.temp_points[0])
+        for pt in self.temp_points[1:]:
+            path.lineTo(pt)
+        if preview_end:
+            path.lineTo(preview_end)
+        self.temp_poly.setPath(path)
 
     def _start_inline_text_editing(self, pos):
         if self.editing_text_item:
@@ -268,16 +318,56 @@ class PDFCanvas(QGraphicsView):
         self.temp_points = []
         self.request_tool_change.emit(next_mode)
 
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton and self.tool_mode == ToolMode.DRAW_LINE:
+            # The single-click that fired before this double-click already appended the last
+            # point; remove it so the path ends at the previous point.
+            if len(self.temp_points) > 2:
+                self.temp_points.pop()
+            if len(self.temp_points) >= 2:
+                self.polyline_complete.emit(self.temp_points[:])
+                self._finish_tool(ToolMode.SELECT)
+            return
+        super().mouseDoubleClickEvent(event)
+
     def mouseMoveEvent(self, event):
         pos = self.mapToScene(event.pos())
         if self.temp_line and len(self.temp_points) == 1:
             self.temp_line.setLine(self.temp_points[0].x(), self.temp_points[0].y(), pos.x(), pos.y())
-        elif self.temp_poly and len(self.temp_points) >= 1:
+        elif self.temp_poly and self.tool_mode == ToolMode.DRAW_LINE and len(self.temp_points) >= 1:
+            self._update_temp_polyline_path(preview_end=pos)
+        elif self.temp_poly and self.tool_mode == ToolMode.POLYGON_AREA and len(self.temp_points) >= 1:
             preview_points = self.temp_points + [pos]
             self.temp_poly.setPolygon(QPolygonF(preview_points))
+        elif self.tool_mode == ToolMode.DRAW_CIRCLE_DRAG and self.drag_start:
+            radius = math.sqrt((pos.x() - self.drag_start.x()) ** 2 + (pos.y() - self.drag_start.y()) ** 2)
+            if self.temp_circle:
+                self.scene.removeItem(self.temp_circle)
+            cx, cy = self.drag_start.x(), self.drag_start.y()
+            self.temp_circle = QGraphicsEllipseItem(cx - radius, cy - radius, radius * 2, radius * 2)
+            pen = QPen(QColor(self.current_shape_color), self.current_shape_line_width)
+            pen.setCosmetic(True)
+            self.temp_circle.setPen(pen)
+            if self.current_fill_color:
+                fill = QColor(self.current_fill_color)
+                fill.setAlpha(50)
+                self.temp_circle.setBrush(fill)
+            self.scene.addItem(self.temp_circle)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if self.tool_mode == ToolMode.DRAW_CIRCLE_DRAG and self.drag_start and event.button() == Qt.LeftButton:
+            pos = self.mapToScene(event.pos())
+            radius = math.sqrt((pos.x() - self.drag_start.x()) ** 2 + (pos.y() - self.drag_start.y()) ** 2)
+            center = self.drag_start
+            self.drag_start = None
+            if self.temp_circle:
+                self.scene.removeItem(self.temp_circle)
+                self.temp_circle = None
+            # Emit even with small radius (0 means "use preset from tool options")
+            self.circle_drag_complete.emit(center, radius)
+            self._finish_tool(ToolMode.SELECT)
+            return
         if self.tool_mode == ToolMode.SELECT:
             # Check if any item moved
             for item in self.scene.selectedItems():
@@ -306,12 +396,43 @@ class PDFCanvas(QGraphicsView):
         if txt_item:
             txt_item.setParentItem(line)
 
-    def add_polygon_annotation(self, points, text="", color="blue", item_id=None, font_family="Arial", font_size=12, line_width=2, opacity=100):
+    def add_polyline_annotation(self, points, text="", color="#7c4dff", item_id=None, font_family="Arial", font_size=12, line_width=2, opacity=100):
+        if not points:
+            return
+        path = QPainterPath()
+        path.moveTo(points[0])
+        for pt in points[1:]:
+            path.lineTo(pt)
+        item = QGraphicsPathItem(path)
+        pen = QPen(QColor(color), line_width)
+        pen.setCosmetic(True)
+        item.setPen(pen)
+        item.setBrush(Qt.NoBrush)
+        item.setOpacity(opacity / 100.0)
+        if item_id:
+            item.setData(0, item_id)
+            item.setData(1, QPointF(0, 0))
+        self.scene.addItem(item)
+
+        if text:
+            mid_idx = len(points) // 2
+            mid = points[mid_idx]
+            txt_item = self._add_text_item(text, mid.x(), mid.y(), color, font_family, font_size)
+            if txt_item:
+                txt_item.setParentItem(item)
+
+    def add_polygon_annotation(self, points, text="", color="blue", item_id=None, font_family="Arial", font_size=12, line_width=2, opacity=100, fill_color=""):
         poly = QGraphicsPolygonItem(QPolygonF(points))
         pen = QPen(QColor(color), line_width)
         pen.setCosmetic(True)
         poly.setPen(pen)
-        poly.setBrush(QColor(QColor(color).red(), QColor(color).green(), QColor(color).blue(), 30))
+        if fill_color:
+            fc = QColor(fill_color)
+            fc.setAlpha(50)
+            poly.setBrush(fc)
+        else:
+            c = QColor(color)
+            poly.setBrush(QColor(c.red(), c.green(), c.blue(), 30))
         poly.setOpacity(opacity / 100.0)
         if item_id: 
             poly.setData(0, item_id)
@@ -324,11 +445,17 @@ class PDFCanvas(QGraphicsView):
         if txt_item:
             txt_item.setParentItem(poly)
 
-    def add_circle_annotation(self, center, radius_px, text="", color="green", item_id=None, font_family="Arial", font_size=12, line_width=2, opacity=100):
+    def add_circle_annotation(self, center, radius_px, text="", color="green", item_id=None, font_family="Arial", font_size=12, line_width=2, opacity=100, fill_color=""):
         circle = QGraphicsEllipseItem(center.x() - radius_px, center.y() - radius_px, radius_px * 2, radius_px * 2)
         pen = QPen(QColor(color), line_width)
         pen.setCosmetic(True)
         circle.setPen(pen)
+        if fill_color:
+            fc = QColor(fill_color)
+            fc.setAlpha(50)
+            circle.setBrush(fc)
+        else:
+            circle.setBrush(Qt.NoBrush)
         circle.setOpacity(opacity / 100.0)
         if item_id: 
             circle.setData(0, item_id)
@@ -373,7 +500,7 @@ class PDFCanvas(QGraphicsView):
         for item in self.scene.items():
             if item.data(0) == item_id:
                 if "color" in attrs or "line_width" in attrs or "opacity" in attrs:
-                    if isinstance(item, (QGraphicsLineItem, QGraphicsEllipseItem, QGraphicsPolygonItem)):
+                    if isinstance(item, (QGraphicsLineItem, QGraphicsEllipseItem, QGraphicsPolygonItem, QGraphicsPathItem)):
                         pen = item.pen()
                         if "color" in attrs:
                             c = QColor(attrs["color"])
@@ -385,6 +512,14 @@ class PDFCanvas(QGraphicsView):
                         item.setPen(pen)
                     if "opacity" in attrs:
                         item.setOpacity(attrs["opacity"] / 100.0)
+                if "fill_color" in attrs:
+                    fc = QColor(attrs["fill_color"]) if attrs["fill_color"] else None
+                    if isinstance(item, (QGraphicsPolygonItem, QGraphicsEllipseItem)):
+                        if fc:
+                            fc.setAlpha(50)
+                            item.setBrush(fc)
+                        else:
+                            item.setBrush(Qt.NoBrush)
                         
                 text_items = [item] if isinstance(item, QGraphicsTextItem) else [child for child in item.childItems() if isinstance(child, QGraphicsTextItem)]
                 
