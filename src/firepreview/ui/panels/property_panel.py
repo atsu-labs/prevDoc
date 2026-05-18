@@ -267,6 +267,10 @@ class PropertyPanel(QWidget):
         if fill_color:
             self.fill_color_preview.setStyleSheet(f"background-color: {fill_color}; border-radius: 4px;")
             self.fill_color_hex_label.setText(fill_color.upper())
+        elif fill_opacity > 0:
+            # fill_color="" + fill_opacity>0 → 線色から派生した塗り
+            self.fill_color_preview.setStyleSheet(f"background-color: {color_hex}; border-radius: 4px; border: 2px dashed #888899;")
+            self.fill_color_hex_label.setText("線と同色")
         else:
             self.fill_color_preview.setStyleSheet("background-color: transparent; border: 1px solid #3d3d5c; border-radius: 4px;")
             self.fill_color_hex_label.setText("なし")

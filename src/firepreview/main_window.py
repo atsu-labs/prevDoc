@@ -479,14 +479,14 @@ class MainWindow(QMainWindow):
         self.canvas.add_line_annotation(p1, p2, text=text, item_id=ann.id, font_family=ann.font_family, font_size=ann.font_size)
 
     def on_polygon_complete(self, points):
-        # No automatic calculation; user clicks 計算 button in properties to compute
         ann = self._add_to_model("polygon", points, real_value=0.0, text="")
         ann.color = self.current_shape_color
         ann.line_width = self.current_line_width
         ann.fill_color = self.current_fill_color
         self.canvas.add_polygon_annotation(points, text="", color=ann.color, item_id=ann.id,
                                            font_family=ann.font_family, font_size=ann.font_size,
-                                           line_width=ann.line_width, fill_color=ann.fill_color)
+                                           line_width=ann.line_width, stroke_opacity=ann.stroke_opacity,
+                                           fill_opacity=ann.fill_opacity, fill_color=ann.fill_color)
 
     def on_polyline_complete(self, points):
         ann = self._add_to_model("polyline", points, real_value=0.0, text="")
@@ -514,7 +514,8 @@ class MainWindow(QMainWindow):
         ann.center_marker = self.current_center_marker
         self.canvas.add_circle_annotation(center, radius_px, text="", color=ann.color, item_id=ann.id,
                                           font_family=ann.font_family, font_size=ann.font_size,
-                                          line_width=ann.line_width, fill_color=ann.fill_color,
+                                          line_width=ann.line_width, stroke_opacity=ann.stroke_opacity,
+                                          fill_opacity=ann.fill_opacity, fill_color=ann.fill_color,
                                           center_marker=ann.center_marker)
 
     def on_point_selected(self, pos):
