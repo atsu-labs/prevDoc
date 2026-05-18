@@ -32,11 +32,11 @@
 
 ### 必要環境
 - Python 3.10以上
-- 依存ライブラリ: `PySide6`, `PyMuPDF` (fitz)
+- 依存ライブラリ: `PySide6`, `PyMuPDF` (fitz), `qtawesome`
 
 ### インストール
 ```powershell
-pip install PySide6 pymupdf
+pip install PySide6 pymupdf qtawesome
 ```
 
 ### 実行
@@ -69,8 +69,8 @@ python src/main.py
   - テキストサイズは「図面固定」モード（拡大縮小に連動）。
 
 ### ファイル構成
-- `src/main.py`: メインロジック、信号制御、UI構築。
-- `src/canvas.py`: カスタム描画キャンバス、マウスイベント処理。
-- `src/models.py`: データモデル（Annotation）、シリアライズ処理。
-- `src/property_panel.py`: 右サイドバーの属性編集UI。
-- `src/pdf_handler.py`: PDFの読み込み・レンダリング支援。
+- `src/main.py`: 起動用のエントリーポイント。
+- `src/firepreview/main_window.py`: メインウィンドウと画面全体の制御。
+- `src/firepreview/ui/`: キャンバスやサイドパネルなどのUIコンポーネント。
+- `src/firepreview/services/`: PDF入出力やプロジェクト保存などのアプリケーションサービス。
+- `src/firepreview/models.py`: データモデル（Annotation）、シリアライズ処理。
