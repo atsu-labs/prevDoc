@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+import math
 import fitz # PyMuPDF
 from PySide6.QtWidgets import (QApplication, QMainWindow, QFileDialog, 
                              QLabel, QHBoxLayout, QWidget, QVBoxLayout, 
@@ -715,6 +716,52 @@ class MainWindow(QMainWindow):
             def to_pdf_pt(qp):
                 return fitz.Point(qp.x() * dpi_factor, qp.y() * dpi_factor)
 
+            marker_size = 10 * dpi_factor  # 10 canvas-px -> PDF points
+
+            def _pdf_endpoint_marker(pg, pt, neighbor, marker_type):
+                """Draw start/end marker at pt, pointing away from neighbor."""
+                if marker_type == "circle":
+                    pg.draw_circle(pt, marker_size / 2, color=color, fill=color,
+                                   width=1, stroke_opacity=fill_opacity, fill_opacity=fill_opacity)
+                elif marker_type == "arrow":
+                    dx = pt.x - neighbor.x
+                    dy = pt.y - neighbor.y
+                    length = math.sqrt(dx * dx + dy * dy)
+                    if length == 0:
+                        return
+                    dx /= length
+                    dy /= length
+                    perp_x, perp_y = -dy, dx
+                    bx = pt.x - dx * marker_size
+                    by = pt.y - dy * marker_size
+                    wing1 = fitz.Point(bx + perp_x * marker_size * 0.45,
+                                       by + perp_y * marker_size * 0.45)
+                    wing2 = fitz.Point(bx - perp_x * marker_size * 0.45,
+                                       by - perp_y * marker_size * 0.45)
+                    pg.draw_polygon([pt, wing1, wing2], color=color, fill=color,
+                                    width=0, stroke_opacity=fill_opacity, fill_opacity=fill_opacity)
+
+            def _pdf_center_marker(pg, center, marker_type):
+                """Draw center marker for a circle."""
+                s = marker_size / 2
+                if marker_type == "circle":
+                    pg.draw_circle(center, s, color=color, fill=color,
+                                   width=1, stroke_opacity=fill_opacity, fill_opacity=fill_opacity)
+                elif marker_type == "cross":
+                    pg.draw_line(fitz.Point(center.x - s, center.y),
+                                 fitz.Point(center.x + s, center.y),
+                                 color=color, width=1.5, stroke_opacity=fill_opacity)
+                    pg.draw_line(fitz.Point(center.x, center.y - s),
+                                 fitz.Point(center.x, center.y + s),
+                                 color=color, width=1.5, stroke_opacity=fill_opacity)
+                elif marker_type == "x":
+                    pg.draw_line(fitz.Point(center.x - s, center.y - s),
+                                 fitz.Point(center.x + s, center.y + s),
+                                 color=color, width=1.5, stroke_opacity=fill_opacity)
+                    pg.draw_line(fitz.Point(center.x + s, center.y - s),
+                                 fitz.Point(center.x - s, center.y + s),
+                                 color=color, width=1.5, stroke_opacity=fill_opacity)
+
             if ann.type == "line":
                 p1 = to_pdf_pt(ann.points[0])
                 p2 = to_pdf_pt(ann.points[1])
@@ -727,6 +774,11 @@ class MainWindow(QMainWindow):
                 pts = [to_pdf_pt(p) for p in ann.points]
                 for i in range(len(pts) - 1):
                     page.draw_line(pts[i], pts[i+1], color=color, width=ann.line_width, stroke_opacity=fill_opacity)
+                if len(pts) >= 2:
+                    if ann.start_marker:
+                        _pdf_endpoint_marker(page, pts[0], pts[1], ann.start_marker)
+                    if ann.end_marker:
+                        _pdf_endpoint_marker(page, pts[-1], pts[-2], ann.end_marker)
                 if ann.text and pts:
                     mid = pts[len(pts) // 2]
                     page.insert_text(mid, ann.text, color=color, fontsize=ann.font_size, fontname="helv", fill_opacity=fill_opacity)
@@ -749,6 +801,8 @@ class MainWindow(QMainWindow):
                     radius = 0
                 if radius > 0:
                     page.draw_circle(center, radius, color=color, width=ann.line_width, stroke_opacity=fill_opacity)
+                if ann.center_marker:
+                    _pdf_center_marker(page, center, ann.center_marker)
                 if ann.text:
                     page.insert_text((center.x, center.y - radius - 5), ann.text, color=color, fontsize=ann.font_size, fontname="helv", fill_opacity=fill_opacity)
             
