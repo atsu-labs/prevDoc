@@ -88,6 +88,10 @@ class PDFCanvas(QGraphicsView):
         self.continuous_text_input = False
         self.editing_text_item = None
 
+        # 中ボタンパン用の状態管理
+        self._mid_pan_active = False
+        self._mid_pan_last = None
+
     def set_text_defaults(self, font_family, font_size, color, continuous=False):
         self.current_text_font = font_family
         self.current_text_size = font_size
@@ -155,6 +159,10 @@ class PDFCanvas(QGraphicsView):
             zoom_out_factor = 1 / zoom_in_factor
             zoom_factor = zoom_in_factor if event.angleDelta().y() > 0 else zoom_out_factor
             self.scale(zoom_factor, zoom_factor)
+        elif event.modifiers() & Qt.ShiftModifier:
+            # Shift+スクロールで左右スクロール
+            delta = event.angleDelta().y()
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta)
         else:
             super().wheelEvent(event)
 
@@ -179,6 +187,14 @@ class PDFCanvas(QGraphicsView):
         super().drawForeground(painter, rect)
 
     def mousePressEvent(self, event):
+        # 中ボタンでパン（どのツールでも有効）
+        if event.button() == Qt.MiddleButton:
+            self._mid_pan_active = True
+            self._mid_pan_last = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+            return
+
         if self.tool_mode == ToolMode.SELECT:
             if event.button() == Qt.LeftButton:
                 pos = self.mapToScene(event.pos())
@@ -350,6 +366,15 @@ class PDFCanvas(QGraphicsView):
         super().mouseDoubleClickEvent(event)
 
     def mouseMoveEvent(self, event):
+        # 中ボタンパン処理
+        if self._mid_pan_active:
+            delta = event.pos() - self._mid_pan_last
+            self._mid_pan_last = event.pos()
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+            event.accept()
+            return
+
         pos = self.mapToScene(event.pos())
         if self.temp_line and len(self.temp_points) == 1:
             self.temp_line.setLine(self.temp_points[0].x(), self.temp_points[0].y(), pos.x(), pos.y())
@@ -375,6 +400,20 @@ class PDFCanvas(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        # 中ボタンパン終了
+        if event.button() == Qt.MiddleButton and self._mid_pan_active:
+            self._mid_pan_active = False
+            self._mid_pan_last = None
+            # ツールモードに応じてカーソルを復元
+            if self.tool_mode == ToolMode.SELECT:
+                self.setCursor(Qt.ArrowCursor)
+            elif self.tool_mode == ToolMode.NONE:
+                self.setCursor(Qt.ArrowCursor)
+            else:
+                self.setCursor(Qt.CrossCursor)
+            event.accept()
+            return
+
         if self.tool_mode == ToolMode.DRAW_CIRCLE_DRAG and self.drag_start and event.button() == Qt.LeftButton:
             pos = self.mapToScene(event.pos())
             radius = math.sqrt((pos.x() - self.drag_start.x()) ** 2 + (pos.y() - self.drag_start.y()) ** 2)
