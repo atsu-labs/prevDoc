@@ -768,3 +768,6 @@ class MainWindow(QMainWindow):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_O and event.modifiers() & Qt.ControlModifier:
             self.open_pdf()
+        elif event.key() == Qt.Key_A and not event.modifiers():
+            # 「a」キーで選択ツールに切り替え
+            self.on_request_tool_change(ToolMode.SELECT)
