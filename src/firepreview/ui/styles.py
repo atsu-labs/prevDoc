@@ -146,6 +146,7 @@ QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
 }}
 
 /* ComboBox ドロップダウンボタン */
+/* ComboBox ドロップダウンボタン */
 QComboBox::drop-down {{
     subcontrol-origin: padding;
     subcontrol-position: top right;
@@ -156,6 +157,11 @@ QComboBox::drop-down {{
     background-color: #2a2a3d;
 }}
 
+QComboBox::down-arrow {{
+    image: url("{down_arrow}");
+    width: 10px;
+    height: 10px;
+}}
 QComboBox::drop-down:hover {{
     background-color: #3d3d5c;
 }}
